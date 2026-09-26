@@ -18,7 +18,7 @@ The MCP server is the enforcement layer for the PARA system. While `../AGENTS.md
 Each tool enforces one or more rules from `../AGENTS.md`:
 
 | Tool | File path | Enforces |
-|---|---|---|
+| --- | --- | --- |
 | `create_project` | `server.py` | Naming convention (`YYYY-MM-Name`), required fields, initial status=Active |
 | `list_projects` | `server.py` | Reads all project `index.md` files, computes days-since-modified |
 | `weekly_review` | `server.py` | Stale check (14-day threshold), returns candidates — never auto-archives |
@@ -44,6 +44,7 @@ Each tool enforces one or more rules from `../AGENTS.md`:
 ## Testing
 
 Run the server locally:
+
 ```bash
 cd mcp
 pip install -r requirements.txt
@@ -51,6 +52,7 @@ python server.py
 ```
 
 Point a Claude Code or OpenClaw session at it via `.claude/settings.json`:
+
 ```json
 {
   "mcpServers": {

@@ -4,7 +4,7 @@
 
 Projects are named `YYYY-MM-Short-Name` so they sort chronologically:
 
-```
+```text
 Projects/
 ├── 2026-01-Launch-Website/
 ├── 2026-03-Learn-Rust/
@@ -12,6 +12,7 @@ Projects/
 ```
 
 Each project folder contains at minimum an `index.md` with:
+
 - Goal / desired outcome
 - Deadline or target date
 - Current status
@@ -21,7 +22,7 @@ Each project folder contains at minimum an `index.md` with:
 
 Areas are single Markdown files named for the responsibility:
 
-```
+```text
 Areas/
 ├── Health.md
 ├── Finance.md
@@ -32,7 +33,7 @@ Areas/
 
 Resources can be files or folders depending on volume:
 
-```
+```text
 Resources/
 ├── Interview-Prep/        ← folder when there are many files
 │   ├── behavioral.md

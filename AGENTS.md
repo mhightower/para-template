@@ -25,13 +25,14 @@ When the user gives you a new item (note, task, link, idea):
 4. Confirm what was filed and where
 
 **Minimum fields to populate at capture:**
+
 - Projects: goal, deadline (or "no hard deadline"), status (`Active`)
 - Areas: purpose statement
 - Resources: topic, source URL if applicable
 
 ### Project vs. Area decision flowchart
 
-```
+```text
 Does this have a finish line or deadline?
 ├── YES → Is it something you are actively working on now?
 │         ├── YES → Projects/
@@ -48,7 +49,7 @@ Does this have a finish line or deadline?
 Always use one of these exact statuses in a project's `index.md`:
 
 | Status | Meaning |
-|---|---|
+| --- | --- |
 | `Active` | Being worked on now |
 | `On Hold` | Paused intentionally, expected to resume |
 | `Waiting` | Blocked on someone or something external |
@@ -62,12 +63,13 @@ Never invent new statuses.
 
 When an item in one bucket is related to another, add a `See:` line:
 
-```
+```text
 See: Work/Resources/Interview-Prep/
 See: Personal/Areas/Health.md
 ```
 
 Use this when:
+
 - A Resource is actively feeding a Project
 - An Area spawned a Project
 - An archived item is referenced by an active one
@@ -92,6 +94,7 @@ On a weekly review request, run these steps in order:
 A Project is stale when no file in its folder has been modified in **14 days**.
 
 On detection:
+
 1. Flag it in the weekly review output
 2. Warn the user: *"This project has had no activity in 14+ days. It will be suggested for Archives at the next review unless marked Active or On Hold."*
 3. At the following review, if still stale, suggest archiving — but do not move it without explicit user confirmation
@@ -114,6 +117,7 @@ Keep it scannable — one line per item unless the user asks for detail.
 ## Archive Rules
 
 Archive a Project when any of the following are true:
+
 - Status is `Complete`
 - Status has been `On Hold` for 30+ days with no file activity
 - User explicitly requests it
@@ -127,18 +131,23 @@ Archive an Area or Resource only on explicit user request.
 ## Agent responsibilities
 
 ### Capture
+
 Follow the Capture Protocol above.
 
 ### File
+
 Follow the naming conventions in `CONVENTIONS.md`. Prefer speed over perfection — file first, refine later.
 
 ### Review
+
 Follow the Weekly Review Protocol above.
 
 ### Notify
+
 Surface upcoming Project deadlines and next actions when asked for a daily or weekly digest. Follow the Daily Digest Format above.
 
 ### Archive
+
 Follow the Archive Rules above. Never archive without user confirmation.
 
 ---

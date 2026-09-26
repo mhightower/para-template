@@ -5,7 +5,7 @@ A GitHub template for organizing your digital life using the [PARA method](https
 ## What is PARA?
 
 | Bucket | Definition | When to use |
-|---|---|---|
+| --- | --- | --- |
 | **Projects** | Active work with a clear deadline or finish line | Anything you are actively working on now |
 | **Areas** | Ongoing responsibilities with no end date | Things you maintain indefinitely |
 | **Resources** | Reference material you may want later | Anything worth saving for future use |
@@ -20,7 +20,7 @@ A GitHub template for organizing your digital life using the [PARA method](https
 
 ## Repo layout
 
-```
+```text
 .
 ├── AGENTS.md              ← Agent operating instructions (OpenClaw, any LLM)
 ├── CLAUDE.md              ← Claude Code specific instructions
@@ -73,7 +73,7 @@ The `mcp/` directory contains a Python MCP server that enforces PARA rules in co
 **Tools provided:**
 
 | Tool | What it does |
-|---|---|
+| --- | --- |
 | `create_project` | Creates a project with correct naming and required fields |
 | `list_projects` | Lists all projects with status and days-since-modified |
 | `weekly_review` | Runs stale check and surfaces archive candidates |
@@ -86,7 +86,7 @@ See `mcp/README.md` for setup instructions.
 ## Key files
 
 | File | Purpose |
-|---|---|
+| --- | --- |
 | `AGENTS.md` | How the AI agent should operate in this repo |
 | `CONVENTIONS.md` | Naming rules, status vocabulary, filing guide |
 | `mcp/AGENTS.md` | Code-level instructions for working on the MCP server |
