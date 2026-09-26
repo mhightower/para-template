@@ -334,6 +334,84 @@ class TestCapture:
 
 
 # ---------------------------------------------------------------------------
+# add_file_to_project
+# ---------------------------------------------------------------------------
+
+class TestAddFileToProject:
+    def test_creates_file_in_project(self, tmp_path):
+        make_project(tmp_path, "Personal", "2026-09-Puppies")
+        result = server.add_file_to_project("Personal/Projects/2026-09-Puppies", "Mic", "# Mic", root=tmp_path)
+        assert result["ok"] is True
+        assert (tmp_path / "Personal" / "Projects" / "2026-09-Puppies" / "Mic.md").exists()
+
+    def test_updates_index_with_files_section(self, tmp_path):
+        make_project(tmp_path, "Personal", "2026-09-Puppies")
+        server.add_file_to_project("Personal/Projects/2026-09-Puppies", "Mic", "# Mic", root=tmp_path)
+        index = (tmp_path / "Personal" / "Projects" / "2026-09-Puppies" / "index.md").read_text()
+        assert "## Files" in index
+        assert "- [Mic](Mic.md)" in index
+
+    def test_index_does_not_list_itself(self, tmp_path):
+        make_project(tmp_path, "Personal", "2026-09-Puppies")
+        server.add_file_to_project("Personal/Projects/2026-09-Puppies", "Mic", "# Mic", root=tmp_path)
+        index = (tmp_path / "Personal" / "Projects" / "2026-09-Puppies" / "index.md").read_text()
+        files_section = index.split("## Files")[1] if "## Files" in index else ""
+        assert "index.md" not in files_section
+
+    def test_multiple_files_listed_sorted(self, tmp_path):
+        make_project(tmp_path, "Personal", "2026-09-Puppies")
+        server.add_file_to_project("Personal/Projects/2026-09-Puppies", "Zoe", "# Zoe", root=tmp_path)
+        server.add_file_to_project("Personal/Projects/2026-09-Puppies", "Abel", "# Abel", root=tmp_path)
+        index = (tmp_path / "Personal" / "Projects" / "2026-09-Puppies" / "index.md").read_text()
+        assert index.index("Abel") < index.index("Zoe")
+
+    def test_second_add_updates_existing_files_section(self, tmp_path):
+        make_project(tmp_path, "Personal", "2026-09-Puppies")
+        server.add_file_to_project("Personal/Projects/2026-09-Puppies", "Mic", "# Mic", root=tmp_path)
+        server.add_file_to_project("Personal/Projects/2026-09-Puppies", "Bell", "# Bell", root=tmp_path)
+        index = (tmp_path / "Personal" / "Projects" / "2026-09-Puppies" / "index.md").read_text()
+        assert index.count("## Files") == 1
+        assert "- [Bell](Bell.md)" in index
+        assert "- [Mic](Mic.md)" in index
+
+    def test_fails_if_project_not_found(self, tmp_path):
+        result = server.add_file_to_project("Personal/Projects/2026-09-Ghost", "Note", "content", root=tmp_path)
+        assert result["ok"] is False
+        assert "not found" in result["error"]
+
+    def test_fails_if_file_already_exists(self, tmp_path):
+        make_project(tmp_path, "Personal", "2026-09-Puppies")
+        server.add_file_to_project("Personal/Projects/2026-09-Puppies", "Mic", "# Mic", root=tmp_path)
+        result = server.add_file_to_project("Personal/Projects/2026-09-Puppies", "Mic", "# Mic again", root=tmp_path)
+        assert result["ok"] is False
+        assert "already exists" in result["error"]
+
+    def test_sanitizes_title_spaces(self, tmp_path):
+        make_project(tmp_path, "Personal", "2026-09-Puppies")
+        result = server.add_file_to_project("Personal/Projects/2026-09-Puppies", "My Dog", "# My Dog", root=tmp_path)
+        assert result["ok"] is True
+        assert (tmp_path / "Personal" / "Projects" / "2026-09-Puppies" / "My-Dog.md").exists()
+
+    def test_path_in_result_is_relative(self, tmp_path):
+        make_project(tmp_path, "Personal", "2026-09-Puppies")
+        result = server.add_file_to_project("Personal/Projects/2026-09-Puppies", "Note", "content", root=tmp_path)
+        assert not Path(result["path"]).is_absolute()
+
+    def test_preserves_existing_index_content(self, tmp_path):
+        make_project(tmp_path, "Personal", "2026-09-Puppies", deadline="2027-01-01")
+        server.add_file_to_project("Personal/Projects/2026-09-Puppies", "Mic", "# Mic", root=tmp_path)
+        index = (tmp_path / "Personal" / "Projects" / "2026-09-Puppies" / "index.md").read_text()
+        assert "**Deadline:** 2027-01-01" in index
+        assert "**Status:** Active" in index
+
+    def test_update_index_files_empty_removes_section(self, tmp_path):
+        proj = make_project(tmp_path, "Personal", "2026-09-Empty")
+        server._update_index_files(proj)
+        index = (proj / "index.md").read_text()
+        assert "## Files" not in index
+
+
+# ---------------------------------------------------------------------------
 # MCP tool wrappers (smoke tests — verify delegation, not business logic)
 # ---------------------------------------------------------------------------
 
@@ -377,4 +455,10 @@ class TestMCPToolWrappers:
     def test_tool_capture_delegates(self, tmp_path, monkeypatch):
         monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
         result = server.tool_capture("Work", "Resources", "Test", "content")
+        assert result["ok"] is True
+
+    def test_tool_add_file_to_project_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        make_project(tmp_path, "Personal", "2026-09-Test")
+        result = server.tool_add_file_to_project("Personal/Projects/2026-09-Test", "Note", "content")
         assert result["ok"] is True
