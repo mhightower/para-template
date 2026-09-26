@@ -128,6 +128,10 @@ class TestListProjects:
         make_project(tmp_path, ".git", "2026-09-A")
         assert server.list_projects(root=tmp_path) == []
 
+    def test_skips_underscore_dirs(self, tmp_path):
+        make_project(tmp_path, "_template-domain", "2026-09-A")
+        assert server.list_projects(root=tmp_path) == []
+
     def test_includes_deadline_from_index(self, tmp_path):
         make_project(tmp_path, "Work", "2026-09-A", deadline="2027-06-01")
         result = server.list_projects(root=tmp_path)
