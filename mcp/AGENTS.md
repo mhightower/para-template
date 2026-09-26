@@ -27,13 +27,43 @@ Each tool enforces one or more rules from `../AGENTS.md`:
 | `capture` | `server.py` | Creates file/folder in correct bucket following naming conventions |
 | `add_file_to_project` | `server.py` | Adds a file to an existing project and syncs `## Files` list in `index.md` |
 
-## Rules to enforce in code (never relax these)
+## Enforced rules (source of truth — do not duplicate in `../AGENTS.md`)
+
+### Status vocabulary
+
+Allowed values, enforced by `update_status`:
+
+| Status | Meaning |
+| --- | --- |
+| `Active` | Being worked on now |
+| `On Hold` | Paused intentionally, expected to resume |
+| `Waiting` | Blocked on someone or something external |
+| `Complete` | Done — ready to archive |
+
+### Stale threshold
+
+A project is stale when its `index.md` has not been modified in **14 days**.
+Enforced by `weekly_review` — the constant lives in `server.py` as `STALE_DAYS`.
+
+### Naming convention
+
+Project folder names must match `YYYY-MM-Short-Name`.
+`create_project` auto-prefixes the current year-month if the name is undated.
+
+### Archive mechanics
+
+`archive_project` moves the project folder to `<domain>/Archives/<name>`.
+It never renames or restructures files. It requires an explicit call — it is
+never triggered automatically.
+
+### Hard rules (never relax in code)
 
 1. Project names must match `YYYY-MM-Short-Name` — reject or auto-correct on create
-2. Status values must be exactly one of: `Active`, `On Hold`, `Waiting`, `Complete`
-3. `archive_project` must never be called without a prior explicit user confirmation in the tool call chain
-4. `weekly_review` must flag stale projects but never move them — return a list only
-5. All file operations are relative to the repo root — never use absolute paths from config
+2. Status values must be exactly one of the four above — reject anything else
+3. `archive_project` requires an explicit call; never auto-archive
+4. `weekly_review` returns a list only — never moves files
+5. All file operations are relative to repo root — no absolute paths from config
+6. Directories starting with `.` or `_` are excluded from domain scans
 
 ## Adding a new tool
 
