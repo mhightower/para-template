@@ -14,10 +14,9 @@ A GitHub template for organizing your digital life using the [PARA method](https
 ## How to use this template
 
 1. Click **Use this template** on GitHub to create your own repo
-2. Rename or delete the starter domains (`Work/`, `Personal/`, `Family/`) to match your life
-3. Copy `_template-domain/` whenever you need a new domain
-4. Follow the conventions in `CONVENTIONS.md`
-5. Set up the MCP server (see `mcp/README.md`) for automated rule enforcement
+2. Copy `_template-domain/` for each domain you want (e.g. `Work/`, `Personal/`)
+3. Follow the conventions in `CONVENTIONS.md`
+4. Set up the MCP server (see `mcp/README.md`) for automated rule enforcement
 
 ## Repo layout
 
@@ -32,9 +31,7 @@ A GitHub template for organizing your digital life using the [PARA method](https
 │   ├── Areas/
 │   ├── Resources/
 │   └── Archives/
-├── Work/                  ← Starter domain
-├── Personal/              ← Starter domain
-├── Family/                ← Starter domain
+├── YourDomain/            ← Created by you (copy _template-domain/)
 ├── mcp/
 │   ├── AGENTS.md          ← MCP server code instructions
 │   ├── server.py          ← MCP server (enforces PARA rules programmatically)
@@ -47,16 +44,15 @@ A GitHub template for organizing your digital life using the [PARA method](https
 
 ## Domains
 
-This template ships with three starter domains. Customize freely.
+Create domains that match your life — there are no defaults. To add a domain:
 
-- `Work/` — professional responsibilities and projects
-- `Personal/` — individual goals and resources
-- `Family/` — shared household responsibilities
-
-To add a domain (e.g. `SideProjects/`):
 ```bash
+cp -r _template-domain/ Work/
+cp -r _template-domain/ Personal/
 cp -r _template-domain/ SideProjects/
 ```
+
+Name them anything. Each gets its own `Projects/`, `Areas/`, `Resources/`, and `Archives/`.
 
 ## AI Agent Integration
 
