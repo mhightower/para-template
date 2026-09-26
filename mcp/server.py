@@ -26,10 +26,12 @@ mcp = MCPServer("PARA")
 # ---------------------------------------------------------------------------
 
 def _sanitize_name(name: str) -> str:
+    """Replace whitespace/underscores with hyphens and strip leading/trailing hyphens."""
     return re.sub(r"[\s_]+", "-", name).strip("-")
 
 
 def _ensure_dated_name(name: str) -> str:
+    """Prefix name with YYYY-MM- if it doesn't already match the project naming convention."""
     name = _sanitize_name(name)
     if not PROJECT_NAME_RE.match(name):
         name = f"{date.today().strftime('%Y-%m')}-{name}"
@@ -37,6 +39,7 @@ def _ensure_dated_name(name: str) -> str:
 
 
 def _parse_index(index_path: Path) -> dict:
+    """Extract Status, Deadline, Goal, and Next Action fields from an index.md."""
     text = index_path.read_text()
     result = {}
     for field in ("Status", "Deadline", "Goal", "Next Action"):
@@ -47,6 +50,7 @@ def _parse_index(index_path: Path) -> dict:
 
 def _write_index(index_path: Path, name: str, status: str, deadline: str,
                  goal: str = "TBD", next_action: str = "TBD") -> None:
+    """Write a standard index.md with the four required PARA fields."""
     index_path.write_text(
         f"# {name}\n\n"
         f"**Status:** {status}\n"
@@ -63,6 +67,7 @@ def _write_index(index_path: Path, name: str, status: str, deadline: str,
 def create_project(domain: str, name: str, deadline: str,
                    goal: str = "TBD", next_action: str = "TBD",
                    root: Optional[Path] = None) -> dict:
+    """Create a new project folder with index.md under <domain>/Projects/."""
     r = root if root is not None else REPO_ROOT
     name = _ensure_dated_name(name)
     project_dir = r / domain / "Projects" / name
@@ -74,6 +79,7 @@ def create_project(domain: str, name: str, deadline: str,
 
 
 def list_projects(domain: Optional[str] = None, root: Optional[Path] = None) -> list:
+    """Return all projects across domains (or one domain), including days since last modified."""
     r = root if root is not None else REPO_ROOT
     results = []
     if domain:
@@ -105,10 +111,12 @@ def list_projects(domain: Optional[str] = None, root: Optional[Path] = None) -> 
 
 
 def weekly_review(root: Optional[Path] = None) -> list:
+    """Return projects stale for STALE_DAYS or more. Never moves files."""
     return [p for p in list_projects(root=root) if p["days_since_modified"] >= STALE_DAYS]
 
 
 def archive_project(path: str, root: Optional[Path] = None) -> dict:
+    """Move a project from <domain>/Projects/<name> to <domain>/Archives/<name>."""
     r = root if root is not None else REPO_ROOT
     src = r / path
     if not src.exists():
@@ -127,6 +135,7 @@ def archive_project(path: str, root: Optional[Path] = None) -> dict:
 
 
 def update_status(path: str, status: str, root: Optional[Path] = None) -> dict:
+    """Rewrite the Status field in a project's index.md; rejects invalid values."""
     if status not in VALID_STATUSES:
         return {
             "ok": False,
@@ -162,6 +171,7 @@ def _update_index_files(proj_dir: Path) -> None:
 
 def add_file_to_project(project_path: str, title: str, content: str,
                         root: Optional[Path] = None) -> dict:
+    """Add a new .md file to a project folder and rebuild the index.md ## Files list."""
     r = root if root is not None else REPO_ROOT
     proj_dir = r / project_path
     if not (proj_dir / "index.md").exists():
@@ -177,6 +187,7 @@ def add_file_to_project(project_path: str, title: str, content: str,
 
 def capture(domain: str, bucket: str, title: str, content: str,
             root: Optional[Path] = None) -> dict:
+    """File a new item into any PARA bucket; Projects get a folder+index.md, others get a .md file."""
     if bucket not in VALID_BUCKETS:
         return {
             "ok": False,
