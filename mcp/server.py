@@ -79,7 +79,7 @@ def list_projects(domain: Optional[str] = None, root: Optional[Path] = None) -> 
     if domain:
         candidates = [r / domain]
     else:
-        candidates = [d for d in r.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        candidates = [d for d in r.iterdir() if d.is_dir() and not d.name.startswith((".", "_"))]
     for d in candidates:
         projects_dir = d / "Projects"
         if not projects_dir.exists():
