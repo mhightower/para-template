@@ -1,0 +1,4 @@
+# Git worktrees are checked out here.
+# The contents of this directory are ignored by git.
+*
+!.gitignore
