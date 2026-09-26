@@ -25,6 +25,7 @@ Each tool enforces one or more rules from `../AGENTS.md`:
 | `archive_project` | `server.py` | Moves folder to `Archives/`, logs action — requires explicit call |
 | `update_status` | `server.py` | Validates against allowed vocabulary: Active, On Hold, Waiting, Complete |
 | `capture` | `server.py` | Creates file/folder in correct bucket following naming conventions |
+| `add_file_to_project` | `server.py` | Adds a file to an existing project and syncs `## Files` list in `index.md` |
 
 ## Rules to enforce in code (never relax these)
 

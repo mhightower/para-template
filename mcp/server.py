@@ -144,6 +144,37 @@ def update_status(path: str, status: str, root: Optional[Path] = None) -> dict:
     return {"ok": True, "path": path, "status": status}
 
 
+def _update_index_files(proj_dir: Path) -> None:
+    """Rebuild the ## Files section in index.md from current folder contents."""
+    index = proj_dir / "index.md"
+    files = sorted(
+        f for f in proj_dir.iterdir()
+        if f.is_file() and f.suffix == ".md" and f.name != "index.md"
+    )
+    text = re.sub(r"\n## Files\n[\s\S]*$", "", index.read_text()).rstrip("\n")
+    if files:
+        file_list = "\n".join(f"- [{f.stem}]({f.name})" for f in files)
+        text = text + f"\n\n## Files\n\n{file_list}\n"
+    else:
+        text = text + "\n"
+    index.write_text(text)
+
+
+def add_file_to_project(project_path: str, title: str, content: str,
+                        root: Optional[Path] = None) -> dict:
+    r = root if root is not None else REPO_ROOT
+    proj_dir = r / project_path
+    if not (proj_dir / "index.md").exists():
+        return {"ok": False, "error": f"Project not found at '{project_path}'"}
+    title = _sanitize_name(title)
+    file_path = proj_dir / f"{title}.md"
+    if file_path.exists():
+        return {"ok": False, "error": f"'{title}.md' already exists in {project_path}"}
+    file_path.write_text(content)
+    _update_index_files(proj_dir)
+    return {"ok": True, "path": str(file_path.relative_to(r))}
+
+
 def capture(domain: str, bucket: str, title: str, content: str,
             root: Optional[Path] = None) -> dict:
     if bucket not in VALID_BUCKETS:
@@ -207,6 +238,12 @@ def tool_update_status(path: str, status: str) -> dict:
 def tool_capture(domain: str, bucket: str, title: str, content: str) -> dict:
     """Capture a new item into the correct PARA bucket."""
     return capture(domain, bucket, title, content, root=REPO_ROOT)
+
+
+@mcp.tool(name="add_file_to_project")
+def tool_add_file_to_project(project_path: str, title: str, content: str) -> dict:
+    """Add a file to an existing project and update the index.md file list."""
+    return add_file_to_project(project_path, title, content, root=REPO_ROOT)
 
 
 if __name__ == "__main__":  # pragma: no cover
