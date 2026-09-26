@@ -71,3 +71,54 @@ Point a Claude Code or OpenClaw session at it via `.claude/settings.json`:
   }
 }
 ```
+
+## Live integration testing via MCP (worktree approach)
+
+To exercise the tools end-to-end through the MCP protocol — not just unit tests — use a
+dedicated git worktree so nothing touches `main` and it can be deleted when done.
+
+### One-time setup
+
+```bash
+# From the para-template repo root:
+git worktree add -b mcp-exercise ../para-exercise feat/mcp-server
+
+# Install dependencies in the worktree's own venv:
+python3 -m venv ../para-exercise/mcp/.venv
+../para-exercise/mcp/.venv/bin/pip install -r ../para-exercise/mcp/requirements.txt
+
+# Create PARA data folders the server will operate on:
+mkdir -p ../para-exercise/{Work,Personal}/{Projects,Areas,Resources,Archives}
+
+# Wire up the MCP server for the session:
+mkdir -p ../para-exercise/.claude
+cat > ../para-exercise/.claude/settings.json <<'EOF'
+{
+  "mcpServers": {
+    "para": {
+      "command": "mcp/.venv/bin/python",
+      "args": ["mcp/server.py"]
+    }
+  }
+}
+EOF
+```
+
+The worktree is at `../para-exercise` relative to this repo (i.e. a sibling directory).
+`REPO_ROOT` inside the server resolves to that worktree root, so all tools operate on its
+`Work/`, `Personal/`, etc. folders — not on this repo.
+
+### Spawn an OpenClaw session in the worktree
+
+Ask OpenClaw (mason) to spawn a subagent with `cwd` set to the worktree root. The subagent
+will have `create_project`, `list_projects`, `weekly_review`, `archive_project`,
+`update_status`, and `capture` available as MCP tools, and should call all six to verify
+end-to-end behavior.
+
+### Teardown
+
+```bash
+cd para-template
+git worktree remove ../para-exercise --force
+git branch -d mcp-exercise
+```
