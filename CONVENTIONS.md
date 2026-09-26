@@ -49,40 +49,6 @@ To archive an item, move it into the `Archives/` folder of the same domain. Keep
 mv Work/Projects/2026-03-Old-Project Work/Archives/
 ```
 
-## Git workflow
-
-All changes go through branches and pull requests — never commit directly to `main`.
-
-### Branch naming
-
-```
-<feature-type>/<short-description>
-
-feature/mcp-server
-fix/stale-date-calculation
-docs/conventions-update
-refactor/domain-structure
-```
-
-### Worktree convention
-
-Worktrees are checked out under `worktree/` and ignored by git:
-
-```bash
-# Create a worktree for a new branch
-git worktree add worktree/<branch-name> -b <feature-type>/<description>
-
-# Example
-git worktree add worktree/feature-mcp-server -b feature/mcp-server
-```
-
-Remove when done:
-```bash
-git worktree remove worktree/<branch-name>
-```
-
----
-
 ## Filing speed over perfection
 
 When in doubt about which bucket something belongs in, file it fast and move it later. The system only works if friction is low.
