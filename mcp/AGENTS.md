@@ -43,12 +43,20 @@ Each tool enforces one or more rules from `../AGENTS.md`:
 
 ## Testing
 
-Run the server locally:
+Unit tests live in `tests/` and require ≥95% coverage to pass. TDD: write tests first.
 
 ```bash
 cd mcp
-pip install -r requirements.txt
-python server.py
+python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pytest
+```
+
+Coverage is enforced via `pytest.ini` (`--cov-fail-under=95`).
+
+Run the server locally:
+
+```bash
+.venv/bin/python server.py
 ```
 
 Point a Claude Code or OpenClaw session at it via `.claude/settings.json`:
@@ -57,7 +65,7 @@ Point a Claude Code or OpenClaw session at it via `.claude/settings.json`:
 {
   "mcpServers": {
     "para": {
-      "command": "python",
+      "command": "mcp/.venv/bin/python",
       "args": ["mcp/server.py"]
     }
   }
