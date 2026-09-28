@@ -13,6 +13,17 @@ The MCP server is the enforcement layer for the PARA system. While `../AGENTS.md
 - **Repo root resolution:** The server resolves the repo root from its own file location (`Path(__file__).parent.parent`). No config needed.
 - **Data format:** Markdown files on disk — no database.
 
+## Prompt
+
+The server exposes one MCP prompt:
+
+| Name | Description |
+| --- | --- |
+| `para-life-os` | Full PARA system prompt with today's date and live domain list injected |
+
+Fetch it via `prompts/get` or let a supporting harness apply it automatically at session start.
+This is the canonical source for the system prompt — `SYSTEM_PROMPT.md` has been removed.
+
 ## Tools
 
 Each tool enforces one or more rules from `../AGENTS.md`:
