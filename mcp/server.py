@@ -60,6 +60,46 @@ def _write_index(index_path: Path, name: str, status: str, deadline: str,
     )
 
 
+def _validate_url(url: str) -> bool:
+    """Return True only for http:// or https:// URLs."""
+    return url.startswith(("http://", "https://"))
+
+
+def _parse_resource(path: Path) -> dict:
+    """Extract links from the ## Links section of a resource .md file."""
+    text = path.read_text()
+    links = []
+    m = re.search(r"## Links\n\n((?:- \[.*?\]\(.*?\)\n)+)", text)
+    if m:
+        for entry in re.finditer(r"- \[([^\]]*)\]\(([^)]+)\)", m.group(1)):
+            label, url = entry.group(1), entry.group(2)
+            links.append({"label": label if label else url, "url": url})
+    return {"links": links}
+
+
+def _append_links_section(file_path: Path, url: str, label: str) -> None:
+    """Append a link entry to the ## Links section of a file, creating the section if absent."""
+    display = label if label else url
+    entry = f"- [{display}]({url})"
+    text = file_path.read_text().rstrip("\n")
+    if "## Links" in text:
+        text = text + f"\n{entry}\n"
+    else:
+        text = text + f"\n\n## Links\n\n{entry}\n"
+    file_path.write_text(text)
+
+
+def _resolve_resource_file(resource_path: str, r: Path) -> Optional[Path]:
+    """Return the .md file for a resource path (folder → index.md, bare name → name.md)."""
+    p = r / resource_path
+    if p.is_dir():
+        f = p / "index.md"
+        return f if f.exists() else None
+    if p.suffix != ".md":
+        p = p.with_suffix(".md")
+    return p if p.exists() else None
+
+
 def _format_deadline_relative(deadline_str: str, today: Optional[date] = None) -> str:
     """Return a human-readable relative string for a deadline date (e.g. '2 weeks', 'overdue 3 days')."""
     if not deadline_str:
@@ -216,6 +256,7 @@ def add_file_to_project(project_path: str, title: str, content: str,
 
 
 def capture(domain: str, bucket: str, title: str, content: str,
+            url: Optional[str] = None, url_label: Optional[str] = None,
             root: Optional[Path] = None) -> dict:
     """File a new item into any PARA bucket; Projects get a folder+index.md, others get a .md file."""
     if bucket not in VALID_BUCKETS:
@@ -223,6 +264,8 @@ def capture(domain: str, bucket: str, title: str, content: str,
             "ok": False,
             "error": f"Invalid bucket '{bucket}'. Must be one of: {', '.join(sorted(VALID_BUCKETS))}",
         }
+    if url is not None and not _validate_url(url):
+        return {"ok": False, "error": f"Invalid URL '{url}'. Must start with http:// or https://"}
     r = root if root is not None else REPO_ROOT
     title = _sanitize_name(title)
     if bucket == "Projects":
@@ -237,7 +280,54 @@ def capture(domain: str, bucket: str, title: str, content: str,
     if file_path.exists():
         return {"ok": False, "error": f"'{file_path.relative_to(r)}' already exists"}
     file_path.write_text(content)
+    if url is not None:
+        _append_links_section(file_path, url, url_label or "")
     return {"ok": True, "path": str(file_path.relative_to(r))}
+
+
+def add_link_to_resource(resource_path: str, url: str, label: str = "",
+                         root: Optional[Path] = None) -> dict:
+    """Append a URL to the ## Links section of an existing resource file or folder."""
+    if not _validate_url(url):
+        return {"ok": False, "error": f"Invalid URL '{url}'. Must start with http:// or https://"}
+    r = root if root is not None else REPO_ROOT
+    file_path = _resolve_resource_file(resource_path, r)
+    if file_path is None:
+        return {"ok": False, "error": f"Resource not found at '{resource_path}'"}
+    existing = _parse_resource(file_path)
+    if any(link["url"] == url for link in existing["links"]):
+        return {"ok": False, "error": f"URL '{url}' already exists in this resource"}
+    _append_links_section(file_path, url, label)
+    return {"ok": True, "path": str(file_path.relative_to(r))}
+
+
+def list_resources(domain: Optional[str] = None, with_links: bool = False,
+                   root: Optional[Path] = None) -> list:
+    """List all resources across domains (or one domain), optionally including their links."""
+    r = root if root is not None else REPO_ROOT
+    results = []
+    if domain:
+        candidates = [r / domain]
+    else:
+        candidates = [d for d in r.iterdir() if d.is_dir() and not d.name.startswith((".", "_"))]
+    for d in candidates:
+        resources_dir = d / "Resources"
+        if not resources_dir.exists():
+            continue
+        for item in sorted(resources_dir.iterdir()):
+            if item.is_file() and item.suffix == ".md":
+                entry = {"path": str(item.relative_to(r)), "domain": d.name, "name": item.stem}
+                if with_links:
+                    entry["links"] = _parse_resource(item)["links"]
+                results.append(entry)
+            elif item.is_dir():
+                index = item / "index.md"
+                if index.exists():
+                    entry = {"path": str(item.relative_to(r)), "domain": d.name, "name": item.name}
+                    if with_links:
+                        entry["links"] = _parse_resource(index)["links"]
+                    results.append(entry)
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -276,9 +366,23 @@ def tool_update_status(path: str, status: str) -> dict:
 
 
 @mcp.tool(name="capture")
-def tool_capture(domain: str, bucket: str, title: str, content: str) -> dict:
-    """Capture a new item into the correct PARA bucket."""
-    return capture(domain, bucket, title, content, root=REPO_ROOT)
+def tool_capture(domain: str, bucket: str, title: str, content: str,
+                 url: str = "", url_label: str = "") -> dict:
+    """Capture a new item into the correct PARA bucket. Optionally attach a URL."""
+    return capture(domain, bucket, title, content,
+                   url=url or None, url_label=url_label or None, root=REPO_ROOT)
+
+
+@mcp.tool(name="add_link_to_resource")
+def tool_add_link_to_resource(resource_path: str, url: str, label: str = "") -> dict:
+    """Append a URL to an existing resource's ## Links section."""
+    return add_link_to_resource(resource_path, url, label, root=REPO_ROOT)
+
+
+@mcp.tool(name="list_resources")
+def tool_list_resources(domain: str = "", with_links: bool = False) -> list:
+    """List all resources, optionally filtered by domain and with their links included."""
+    return list_resources(domain or None, with_links, root=REPO_ROOT)
 
 
 @mcp.tool(name="add_file_to_project")
