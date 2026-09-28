@@ -137,6 +137,12 @@ class TestListProjects:
         result = server.list_projects(root=tmp_path)
         assert result[0]["deadline"] == "2027-06-01"
 
+    def test_includes_deadline_relative(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A", deadline="2027-06-01")
+        result = server.list_projects(root=tmp_path)
+        assert "deadline_relative" in result[0]
+        assert isinstance(result[0]["deadline_relative"], str)
+
     def test_skips_domain_dirs_with_no_projects_subdir(self, tmp_path):
         (tmp_path / "Work").mkdir()
         assert server.list_projects(root=tmp_path) == []
@@ -145,6 +151,55 @@ class TestListProjects:
         (tmp_path / "Work" / "Projects").mkdir(parents=True)
         (tmp_path / "Work" / "Projects" / "README.md").write_text("ignore me")
         assert server.list_projects(root=tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# _format_deadline_relative
+# ---------------------------------------------------------------------------
+
+class TestDeadlineRelative:
+    def _fmt(self, deadline_str, today_str):
+        today = date.fromisoformat(today_str)
+        return server._format_deadline_relative(deadline_str, today=today)
+
+    def test_empty_deadline_returns_empty(self):
+        assert self._fmt("", "2026-09-28") == ""
+
+    def test_tbd_returns_empty(self):
+        assert self._fmt("TBD", "2026-09-28") == ""
+
+    def test_invalid_date_returns_empty(self):
+        assert self._fmt("not-a-date", "2026-09-28") == ""
+
+    def test_today(self):
+        assert self._fmt("2026-09-28", "2026-09-28") == "today"
+
+    def test_tomorrow(self):
+        assert self._fmt("2026-09-29", "2026-09-28") == "1 day"
+
+    def test_days(self):
+        assert self._fmt("2026-10-04", "2026-09-28") == "6 days"
+
+    def test_one_week(self):
+        assert self._fmt("2026-10-12", "2026-09-28") == "2 weeks"
+
+    def test_weeks(self):
+        assert self._fmt("2026-11-09", "2026-09-28") == "6 weeks"
+
+    def test_months(self):
+        assert self._fmt("2027-03-28", "2026-09-28") == "6 months"
+
+    def test_overdue_one_day(self):
+        assert self._fmt("2026-09-27", "2026-09-28") == "overdue 1 day"
+
+    def test_overdue_days(self):
+        assert self._fmt("2026-09-21", "2026-09-28") == "overdue 1 week"
+
+    def test_overdue_weeks(self):
+        assert self._fmt("2026-08-28", "2026-09-28") == "overdue 4 weeks"
+
+    def test_overdue_months(self):
+        assert self._fmt("2026-03-28", "2026-09-28") == "overdue 6 months"
 
 
 # ---------------------------------------------------------------------------
