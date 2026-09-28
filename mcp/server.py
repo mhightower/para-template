@@ -60,6 +60,35 @@ def _write_index(index_path: Path, name: str, status: str, deadline: str,
     )
 
 
+def _format_deadline_relative(deadline_str: str, today: Optional[date] = None) -> str:
+    """Return a human-readable relative string for a deadline date (e.g. '2 weeks', 'overdue 3 days')."""
+    if not deadline_str:
+        return ""
+    try:
+        deadline = date.fromisoformat(deadline_str)
+    except ValueError:
+        return ""
+    ref = today if today is not None else date.today()
+    delta = (deadline - ref).days
+    if delta == 0:
+        return "today"
+
+    def _relative(n: int) -> str:
+        if n == 1:
+            return "1 day"
+        if n < 7:
+            return f"{n} days"
+        if n < 56:
+            weeks = n // 7
+            return f"{weeks} week" if weeks == 1 else f"{weeks} weeks"
+        months = n // 30
+        return f"{months} month" if months == 1 else f"{months} months"
+
+    if delta > 0:
+        return _relative(delta)
+    return f"overdue {_relative(-delta)}"
+
+
 # ---------------------------------------------------------------------------
 # Business logic (root=None → uses REPO_ROOT; pass root for tests)
 # ---------------------------------------------------------------------------
@@ -105,6 +134,7 @@ def list_projects(domain: Optional[str] = None, root: Optional[Path] = None) -> 
                 "name": proj.name,
                 "status": data["status"],
                 "deadline": data["deadline"],
+                "deadline_relative": _format_deadline_relative(data["deadline"]),
                 "days_since_modified": days_since,
             })
     return results
