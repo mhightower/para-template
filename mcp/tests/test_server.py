@@ -557,3 +557,270 @@ class TestSystemPrompt:
         result = server.tool_para_system_prompt()
         assert isinstance(result, str)
         assert "PARA Life OS" in result
+
+
+# ---------------------------------------------------------------------------
+# _validate_url
+# ---------------------------------------------------------------------------
+
+class TestValidateUrl:
+    def test_https_valid(self):
+        assert server._validate_url("https://example.com") is True
+
+    def test_http_valid(self):
+        assert server._validate_url("http://example.com") is True
+
+    def test_missing_scheme_invalid(self):
+        assert server._validate_url("example.com") is False
+
+    def test_empty_invalid(self):
+        assert server._validate_url("") is False
+
+    def test_ftp_invalid(self):
+        assert server._validate_url("ftp://files.example.com") is False
+
+
+# ---------------------------------------------------------------------------
+# _parse_resource
+# ---------------------------------------------------------------------------
+
+class TestParseResource:
+    def test_no_links_section(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text("# Note\n\nsome content\n")
+        assert server._parse_resource(f) == {"links": []}
+
+    def test_single_link(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text("# Note\n\n## Links\n\n- [MDN](https://developer.mozilla.org)\n")
+        assert server._parse_resource(f) == {
+            "links": [{"label": "MDN", "url": "https://developer.mozilla.org"}]
+        }
+
+    def test_multiple_links(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text(
+            "# Note\n\n## Links\n\n"
+            "- [MDN](https://developer.mozilla.org)\n"
+            "- [TS](https://typescriptlang.org)\n"
+        )
+        result = server._parse_resource(f)
+        assert len(result["links"]) == 2
+        assert result["links"][1]["label"] == "TS"
+
+    def test_link_without_label_uses_url(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text("# Note\n\n## Links\n\n- [](https://example.com)\n")
+        result = server._parse_resource(f)
+        assert result["links"][0]["label"] == "https://example.com"
+
+
+# ---------------------------------------------------------------------------
+# _append_links_section
+# ---------------------------------------------------------------------------
+
+class TestAppendLinksSection:
+    def test_creates_links_section(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text("# Note\n\nsome content\n")
+        server._append_links_section(f, "https://example.com", "Example")
+        text = f.read_text()
+        assert "## Links" in text
+        assert "- [Example](https://example.com)" in text
+
+    def test_appends_to_existing_section(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text("# Note\n\n## Links\n\n- [First](https://first.com)\n")
+        server._append_links_section(f, "https://second.com", "Second")
+        text = f.read_text()
+        assert "- [First](https://first.com)" in text
+        assert "- [Second](https://second.com)" in text
+
+    def test_empty_label_uses_url(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text("# Note\n")
+        server._append_links_section(f, "https://example.com", "")
+        assert "- [https://example.com](https://example.com)" in f.read_text()
+
+
+# ---------------------------------------------------------------------------
+# capture with URL
+# ---------------------------------------------------------------------------
+
+class TestCaptureWithUrl:
+    def test_capture_resource_with_url(self, tmp_path):
+        result = server.capture("Work", "Resources", "Python-Docs",
+                                "Reference material.",
+                                url="https://docs.python.org", url_label="Python Docs",
+                                root=tmp_path)
+        assert result["ok"] is True
+        text = (tmp_path / "Work" / "Resources" / "Python-Docs.md").read_text()
+        assert "## Links" in text
+        assert "- [Python Docs](https://docs.python.org)" in text
+
+    def test_capture_without_url_unchanged(self, tmp_path):
+        result = server.capture("Work", "Resources", "Notes", "content", root=tmp_path)
+        assert result["ok"] is True
+        text = (tmp_path / "Work" / "Resources" / "Notes.md").read_text()
+        assert "## Links" not in text
+
+    def test_capture_invalid_url_rejected(self, tmp_path):
+        result = server.capture("Work", "Resources", "Bad",
+                                "content", url="not-a-url", root=tmp_path)
+        assert result["ok"] is False
+        assert "URL" in result["error"]
+
+    def test_capture_url_label_defaults_to_url(self, tmp_path):
+        server.capture("Work", "Resources", "No-Label", "content",
+                       url="https://example.com", root=tmp_path)
+        text = (tmp_path / "Work" / "Resources" / "No-Label.md").read_text()
+        assert "- [https://example.com](https://example.com)" in text
+
+
+# ---------------------------------------------------------------------------
+# add_link_to_resource
+# ---------------------------------------------------------------------------
+
+class TestAddLinkToResource:
+    def test_adds_link_to_file_resource(self, tmp_path):
+        (tmp_path / "Work" / "Resources").mkdir(parents=True)
+        (tmp_path / "Work" / "Resources" / "Notes.md").write_text("# Notes\n")
+        result = server.add_link_to_resource(
+            "Work/Resources/Notes", "https://example.com", "Example", root=tmp_path
+        )
+        assert result["ok"] is True
+        text = (tmp_path / "Work" / "Resources" / "Notes.md").read_text()
+        assert "- [Example](https://example.com)" in text
+
+    def test_adds_link_to_folder_resource(self, tmp_path):
+        folder = tmp_path / "Work" / "Resources" / "Interview-Prep"
+        folder.mkdir(parents=True)
+        (folder / "index.md").write_text("# Interview Prep\n")
+        result = server.add_link_to_resource(
+            "Work/Resources/Interview-Prep", "https://example.com", "Guide", root=tmp_path
+        )
+        assert result["ok"] is True
+        assert "- [Guide](https://example.com)" in (folder / "index.md").read_text()
+
+    def test_path_with_md_extension(self, tmp_path):
+        (tmp_path / "Work" / "Resources").mkdir(parents=True)
+        (tmp_path / "Work" / "Resources" / "Notes.md").write_text("# Notes\n")
+        result = server.add_link_to_resource(
+            "Work/Resources/Notes.md", "https://example.com", "Ex", root=tmp_path
+        )
+        assert result["ok"] is True
+
+    def test_invalid_url_rejected(self, tmp_path):
+        (tmp_path / "Work" / "Resources").mkdir(parents=True)
+        (tmp_path / "Work" / "Resources" / "Notes.md").write_text("# Notes\n")
+        result = server.add_link_to_resource(
+            "Work/Resources/Notes", "bad-url", "Bad", root=tmp_path
+        )
+        assert result["ok"] is False
+        assert "URL" in result["error"]
+
+    def test_resource_not_found(self, tmp_path):
+        result = server.add_link_to_resource(
+            "Work/Resources/Missing", "https://example.com", "X", root=tmp_path
+        )
+        assert result["ok"] is False
+        assert "not found" in result["error"]
+
+    def test_duplicate_url_rejected(self, tmp_path):
+        (tmp_path / "Work" / "Resources").mkdir(parents=True)
+        (tmp_path / "Work" / "Resources" / "Notes.md").write_text(
+            "# Notes\n\n## Links\n\n- [X](https://example.com)\n"
+        )
+        result = server.add_link_to_resource(
+            "Work/Resources/Notes", "https://example.com", "Dup", root=tmp_path
+        )
+        assert result["ok"] is False
+        assert "already" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# list_resources
+# ---------------------------------------------------------------------------
+
+class TestListResources:
+    def _make_resource_file(self, root, domain, name, content="# Resource\n"):
+        d = root / domain / "Resources"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{name}.md").write_text(content)
+
+    def _make_resource_folder(self, root, domain, name, content="# Resource\n"):
+        d = root / domain / "Resources" / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "index.md").write_text(content)
+
+    def test_lists_file_resources(self, tmp_path):
+        self._make_resource_file(tmp_path, "Work", "Python-Docs")
+        result = server.list_resources(root=tmp_path)
+        assert len(result) == 1
+        assert result[0]["name"] == "Python-Docs"
+
+    def test_lists_folder_resources(self, tmp_path):
+        self._make_resource_folder(tmp_path, "Work", "Interview-Prep")
+        result = server.list_resources(root=tmp_path)
+        assert len(result) == 1
+        assert result[0]["name"] == "Interview-Prep"
+
+    def test_filters_by_domain(self, tmp_path):
+        self._make_resource_file(tmp_path, "Work", "Work-Note")
+        self._make_resource_file(tmp_path, "Personal", "Personal-Note")
+        result = server.list_resources(domain="Work", root=tmp_path)
+        assert len(result) == 1
+        assert result[0]["domain"] == "Work"
+
+    def test_empty_when_no_resources(self, tmp_path):
+        assert server.list_resources(root=tmp_path) == []
+
+    def test_with_links_false_omits_links(self, tmp_path):
+        self._make_resource_file(tmp_path, "Work", "Note",
+                                 "# Note\n\n## Links\n\n- [X](https://x.com)\n")
+        result = server.list_resources(root=tmp_path)
+        assert "links" not in result[0]
+
+    def test_with_links_true_includes_links(self, tmp_path):
+        self._make_resource_file(tmp_path, "Work", "Note",
+                                 "# Note\n\n## Links\n\n- [X](https://x.com)\n")
+        result = server.list_resources(with_links=True, root=tmp_path)
+        assert result[0]["links"] == [{"label": "X", "url": "https://x.com"}]
+
+    def test_skips_hidden_and_underscore_domains(self, tmp_path):
+        self._make_resource_file(tmp_path, ".hidden", "Note")
+        self._make_resource_file(tmp_path, "_template-domain", "Note")
+        assert server.list_resources(root=tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# MCP tool wrapper additions
+# ---------------------------------------------------------------------------
+
+class TestMCPResourceToolWrappers:
+    def test_tool_add_link_to_resource_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        (tmp_path / "Work" / "Resources").mkdir(parents=True)
+        (tmp_path / "Work" / "Resources" / "Note.md").write_text("# Note\n")
+        result = server.tool_add_link_to_resource(
+            "Work/Resources/Note", "https://example.com", "Example"
+        )
+        assert result["ok"] is True
+
+    def test_tool_list_resources_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        result = server.tool_list_resources()
+        assert isinstance(result, list)
+
+    def test_skips_domain_with_no_resources_dir(self, tmp_path):
+        (tmp_path / "Work").mkdir()
+        assert server.list_resources(root=tmp_path) == []
+
+    def test_with_links_true_folder_resource(self, tmp_path):
+        folder = tmp_path / "Work" / "Resources" / "Interview-Prep"
+        folder.mkdir(parents=True)
+        (folder / "index.md").write_text(
+            "# Prep\n\n## Links\n\n- [Guide](https://guide.com)\n"
+        )
+        result = server.list_resources(with_links=True, root=tmp_path)
+        assert result[0]["links"] == [{"label": "Guide", "url": "https://guide.com"}]
