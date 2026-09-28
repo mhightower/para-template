@@ -517,3 +517,43 @@ class TestMCPToolWrappers:
         make_project(tmp_path, "Personal", "2026-09-Test")
         result = server.tool_add_file_to_project("Personal/Projects/2026-09-Test", "Note", "content")
         assert result["ok"] is True
+
+
+class TestSystemPrompt:
+    def test_contains_today(self, tmp_path):
+        prompt = server._build_system_prompt(root=tmp_path)
+        assert date.today().isoformat() in prompt
+
+    def test_lists_domains(self, tmp_path):
+        (tmp_path / "Work").mkdir()
+        (tmp_path / "Personal").mkdir()
+        prompt = server._build_system_prompt(root=tmp_path)
+        assert "Work" in prompt
+        assert "Personal" in prompt
+
+    def test_no_domains_shows_placeholder(self, tmp_path):
+        prompt = server._build_system_prompt(root=tmp_path)
+        assert "none configured yet" in prompt
+
+    def test_excludes_hidden_and_underscore_dirs(self, tmp_path):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "_template-domain").mkdir()
+        (tmp_path / "Work").mkdir()
+        prompt = server._build_system_prompt(root=tmp_path)
+        # domain list line is "Active domains: ..." — check exclusions there
+        domain_line = next(l for l in prompt.splitlines() if "Active domains:" in l)
+        assert ".git" not in domain_line
+        assert "_template-domain" not in domain_line
+        assert "Work" in domain_line
+
+    def test_contains_key_sections(self, tmp_path):
+        prompt = server._build_system_prompt(root=tmp_path)
+        assert "## MCP Tools" in prompt
+        assert "## Capture Protocol" in prompt
+        assert "## Weekly Review Protocol" in prompt
+
+    def test_prompt_wrapper_uses_repo_root(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        result = server.tool_para_system_prompt()
+        assert isinstance(result, str)
+        assert "PARA Life OS" in result
