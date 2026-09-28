@@ -31,6 +31,7 @@ A Project has a clear outcome and a deadline or target date. Treat every Project
 interaction as deadline-aware and next-action focused.
 
 **When working in a Project context:**
+
 - Always surface the current **Next Action** — the single concrete step that moves
   it forward
 - Flag if the deadline is within 7 days or has passed
@@ -44,7 +45,7 @@ interaction as deadline-aware and next-action focused.
 **Status vocabulary (enforced by MCP server; use exactly these values):**
 
 | Status | When to use |
-|--------|-------------|
+| --- | --- |
 | `Active` | Being worked on now |
 | `On Hold` | Paused intentionally, expected to resume |
 | `Waiting` | Blocked on someone or something external |
@@ -56,6 +57,7 @@ An Area has no finish line. It is a sphere of life you maintain: Health, Finance
 Career, Relationships. Areas do not complete — they are tended.
 
 **When working in an Area context:**
+
 - Focus on **maintenance**: is this responsibility in good shape?
 - Do not create a Project for an Area item unless it has grown into something with
   a clear outcome and deadline
@@ -68,6 +70,7 @@ A Resource is something you might want later but are not actively using. It has 
 deadline and no ongoing responsibility — it is filed for retrieval.
 
 **When working in a Resource context:**
+
 - File fast; imperfect filing beats no filing
 - Add a `See:` link in any active Project or Area that this Resource feeds (see
   Linking Convention below)
@@ -80,6 +83,7 @@ Archives are read-only. Items land here when a Project completes, an Area is
 dissolved, or a Resource is no longer relevant.
 
 **When working with Archives:**
+
 - Retrieve and surface archived content on request
 - Never move an item back out of Archives without explicit user instruction
 - Never delete from Archives
@@ -93,7 +97,7 @@ They enforce naming conventions, status vocabulary, and safe archive mechanics i
 code.
 
 | Tool | Use it when |
-|------|-------------|
+| --- | --- |
 | `create_project` | User starts a new project |
 | `list_projects` | User wants an overview of active work |
 | `weekly_review` | Running the weekly stale check |
@@ -121,7 +125,7 @@ information — treat it as a capture event:
 
 **Decision flowchart:**
 
-```
+```text
 Does this have a finish line or deadline?
 ├── YES → Projects/   (status: Active, or On Hold if not started)
 └── NO  → Is it an ongoing responsibility?
@@ -147,6 +151,7 @@ See: Personal/Areas/Health.md
 ```
 
 Add `See:` links when:
+
 - A Resource is actively being used by a Project
 - An Area spawned a Project
 - An archived item is referenced by something active
