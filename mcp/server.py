@@ -17,8 +17,14 @@ VALID_STATUSES = {"Active", "On Hold", "Waiting", "Complete"}
 VALID_BUCKETS = {"Projects", "Areas", "Resources", "Archives"}
 PROJECT_NAME_RE = re.compile(r"^\d{4}-\d{2}-.+$")
 STALE_DAYS = 14
+INBOX_DIR = "Inbox"
 
 mcp = MCPServer("PARA")
+
+
+def _now() -> datetime:
+    """Return current datetime; exists as a seam for testing."""
+    return datetime.now()
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +337,115 @@ def list_resources(domain: Optional[str] = None, with_links: bool = False,
 
 
 # ---------------------------------------------------------------------------
+# Inbox capture and triage
+# ---------------------------------------------------------------------------
+
+def capture_to_inbox(content: str, tags: list = None,
+                     root: Optional[Path] = None) -> dict:
+    """File raw content into Inbox/ with a timestamped filename and optional tag frontmatter."""
+    r = root if root is not None else REPO_ROOT
+    inbox = r / INBOX_DIR
+    inbox.mkdir(parents=True, exist_ok=True)
+    ts = _now().strftime("%Y-%m-%d-%H%M%S")
+    file_path = inbox / f"{ts}.md"
+    tags = tags or []
+    if tags:
+        tag_lines = "\n".join(f"  - {t}" for t in tags)
+        text = f"---\ntags:\n{tag_lines}\n---\n\n{content}\n"
+    else:
+        text = content + "\n"
+    file_path.write_text(text)
+    return {"ok": True, "path": str(file_path.relative_to(r))}
+
+
+def _collect_para_names(root: Path) -> list:
+    """Walk the PARA structure and return (bucket_type, display_name, relative_path) tuples."""
+    items = []
+    for domain_dir in root.iterdir():
+        if not domain_dir.is_dir() or domain_dir.name.startswith((".", "_")):
+            continue
+        if domain_dir.name == INBOX_DIR:
+            continue
+        for bucket in ("Projects", "Areas", "Resources"):
+            bucket_dir = domain_dir / bucket
+            if not bucket_dir.exists():
+                continue
+            for entry in bucket_dir.iterdir():
+                if entry.is_dir() and (entry / "index.md").exists():
+                    items.append((bucket, entry.name, str(entry.relative_to(root))))
+                elif entry.is_file() and entry.suffix == ".md":
+                    items.append((bucket, entry.stem, str(entry.relative_to(root))))
+    return items
+
+
+def _extract_tags_from_inbox(text: str) -> list:
+    """Parse YAML frontmatter tags list from inbox file text."""
+    if not text.startswith("---\n"):
+        return []
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return []
+    frontmatter = text[4:end]
+    tags = []
+    in_tags = False
+    for line in frontmatter.splitlines():
+        if line.strip() == "tags:":
+            in_tags = True
+            continue
+        if in_tags:
+            m = re.match(r"^\s+-\s+(.+)$", line)
+            if m:
+                tags.append(m.group(1).strip().lower())
+            else:
+                in_tags = False
+    return tags
+
+
+def suggest_triage(inbox_file: str, root: Optional[Path] = None) -> dict | list:
+    """Read an inbox file and suggest PARA destinations based on keyword/tag matching."""
+    r = root if root is not None else REPO_ROOT
+    file_path = r / inbox_file
+    if not file_path.exists():
+        return {"ok": False, "error": f"Inbox file not found: '{inbox_file}'"}
+
+    text = file_path.read_text()
+    tags = _extract_tags_from_inbox(text)
+    content_lower = text.lower()
+
+    para_items = _collect_para_names(root=r)
+    suggestions = []
+
+    for bucket, name, path in para_items:
+        name_words = re.split(r"[\s\-_]+", name.lower())
+        name_words = [w for w in name_words if len(w) > 2 and not re.match(r"^\d+$", w)]
+
+        tag_hit = any(w in tags for w in name_words)
+        keyword_hits = sum(1 for w in name_words if w in content_lower)
+
+        if tag_hit:
+            suggestions.append({
+                "destination": path,
+                "reason": f"Tag match on '{name}'",
+                "confidence": "high",
+            })
+        elif keyword_hits >= 2:
+            suggestions.append({
+                "destination": path,
+                "reason": f"Keyword match on '{name}' ({keyword_hits} words)",
+                "confidence": "high",
+            })
+        elif keyword_hits == 1:
+            suggestions.append({
+                "destination": path,
+                "reason": f"Keyword match on '{name}'",
+                "confidence": "medium" if len(name_words) == 1 else "low",
+            })
+
+    suggestions.sort(key=lambda s: {"high": 0, "medium": 1, "low": 2}[s["confidence"]])
+    return suggestions
+
+
+# ---------------------------------------------------------------------------
 # MCP tool registration (thin wrappers — no root param exposed to MCP clients)
 # ---------------------------------------------------------------------------
 
@@ -389,6 +504,18 @@ def tool_list_resources(domain: str = "", with_links: bool = False) -> list:
 def tool_add_file_to_project(project_path: str, title: str, content: str) -> dict:
     """Add a file to an existing project and update the index.md file list."""
     return add_file_to_project(project_path, title, content, root=REPO_ROOT)
+
+
+@mcp.tool(name="capture_to_inbox")
+def tool_capture_to_inbox(content: str, tags: list = None) -> dict:
+    """Drop raw content into Inbox/ without choosing a project or area upfront."""
+    return capture_to_inbox(content, tags=tags or [], root=REPO_ROOT)
+
+
+@mcp.tool(name="suggest_triage")
+def tool_suggest_triage(inbox_file: str) -> dict | list:
+    """Suggest which Project/Area/Resource an inbox item belongs to."""
+    return suggest_triage(inbox_file, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
