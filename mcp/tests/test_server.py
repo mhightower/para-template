@@ -824,3 +824,82 @@ class TestMCPResourceToolWrappers:
         )
         result = server.list_resources(with_links=True, root=tmp_path)
         assert result[0]["links"] == [{"label": "Guide", "url": "https://guide.com"}]
+
+
+# ---------------------------------------------------------------------------
+# Progress status field (issue #28)
+# ---------------------------------------------------------------------------
+
+class TestProgressStatus:
+    def test_set_progress_status_writes_to_frontmatter(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A")
+        result = server.set_progress_status("Work/Projects/2026-09-A", "active", root=tmp_path)
+        assert result["ok"] is True
+        text = (tmp_path / "Work" / "Projects" / "2026-09-A" / "index.md").read_text()
+        assert "**Progress:** active" in text
+
+    def test_set_progress_status_valid_values(self, tmp_path):
+        for status in ("planning", "active", "blocked", "review"):
+            make_project(tmp_path, "Work", f"2026-09-{status}")
+            result = server.set_progress_status(f"Work/Projects/2026-09-{status}", status, root=tmp_path)
+            assert result["ok"] is True
+
+    def test_set_progress_status_rejects_invalid(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A")
+        result = server.set_progress_status("Work/Projects/2026-09-A", "done", root=tmp_path)
+        assert result["ok"] is False
+        assert "allowed" in result["error"].lower() or "invalid" in result["error"].lower()
+        assert "planning" in result["error"]
+
+    def test_set_progress_status_project_not_found(self, tmp_path):
+        result = server.set_progress_status("Work/Projects/ghost", "active", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_filter_projects_by_progress_status(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A")
+        make_project(tmp_path, "Work", "2026-09-B")
+        server.set_progress_status("Work/Projects/2026-09-A", "blocked", root=tmp_path)
+        server.set_progress_status("Work/Projects/2026-09-B", "active", root=tmp_path)
+        results = server.filter_projects_by_progress("blocked", root=tmp_path)
+        names = [r["name"] for r in results]
+        assert "2026-09-A" in names
+        assert "2026-09-B" not in names
+
+    def test_filter_projects_by_progress_rejects_invalid(self, tmp_path):
+        result = server.filter_projects_by_progress("invalid", root=tmp_path)
+        assert isinstance(result, dict)
+        assert result.get("ok") is False
+
+    def test_list_projects_includes_progress_field(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A")
+        server.set_progress_status("Work/Projects/2026-09-A", "review", root=tmp_path)
+        projects = server.list_projects(root=tmp_path)
+        proj = next(p for p in projects if p["name"] == "2026-09-A")
+        assert proj.get("progress") == "review"
+
+    def test_project_log_records_status_change(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A")
+        server.set_progress_status("Work/Projects/2026-09-A", "active", root=tmp_path)
+        server.set_progress_status("Work/Projects/2026-09-A", "blocked", root=tmp_path)
+        log = server.get_project_log("Work/Projects/2026-09-A", root=tmp_path)
+        assert len(log) >= 2
+        statuses = [entry["progress"] for entry in log]
+        assert "active" in statuses
+        assert "blocked" in statuses
+
+    def test_project_log_keeps_at_most_5_entries(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A")
+        for status in ["planning", "active", "blocked", "review", "active", "blocked", "planning"]:
+            server.set_progress_status("Work/Projects/2026-09-A", status, root=tmp_path)
+        log = server.get_project_log("Work/Projects/2026-09-A", root=tmp_path)
+        assert len(log) <= 5
+
+    def test_project_log_project_not_found(self, tmp_path):
+        result = server.get_project_log("Work/Projects/ghost", root=tmp_path)
+        assert isinstance(result, dict)
+        assert result.get("ok") is False
+
+    def test_project_log_returns_empty_for_project_with_no_history(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Fresh")
+        log = server.get_project_log("Work/Projects/2026-09-Fresh", root=tmp_path)
+        assert log == []
