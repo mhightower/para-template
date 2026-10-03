@@ -331,6 +331,63 @@ def list_resources(domain: Optional[str] = None, with_links: bool = False,
 
 
 # ---------------------------------------------------------------------------
+# WIP / context-aware status (issue #23)
+# ---------------------------------------------------------------------------
+
+WIP_STALE_DAYS = 30
+
+
+def get_wip(bucket: str = "Projects", domain: Optional[str] = None,
+            root: Optional[Path] = None) -> list:
+    """Return items from the given bucket sorted by most-recently-modified with stale flags."""
+    r = root if root is not None else REPO_ROOT
+    if domain:
+        domain_dirs = [r / domain]
+    else:
+        domain_dirs = [d for d in r.iterdir() if d.is_dir() and not d.name.startswith((".", "_"))]
+
+    results = []
+    for d in domain_dirs:
+        bucket_dir = d / bucket
+        if not bucket_dir.exists():
+            continue
+        for item in bucket_dir.iterdir():
+            if bucket == "Projects":
+                if not item.is_dir():
+                    continue
+                index = item / "index.md"
+                if not index.exists():
+                    continue
+                data = _parse_index(index)
+                mtime = datetime.fromtimestamp(index.stat().st_mtime)
+                days_ago = (datetime.now() - mtime).days
+                results.append({
+                    "path": str(item.relative_to(r)),
+                    "domain": d.name,
+                    "name": item.name,
+                    "status": data["status"],
+                    "last_modified": mtime.isoformat(timespec="seconds"),
+                    "days_since_modified": days_ago,
+                    "stale": days_ago >= WIP_STALE_DAYS,
+                })
+            else:
+                if item.is_file() and item.suffix == ".md":
+                    mtime = datetime.fromtimestamp(item.stat().st_mtime)
+                    days_ago = (datetime.now() - mtime).days
+                    results.append({
+                        "path": str(item.relative_to(r)),
+                        "domain": d.name,
+                        "name": item.stem,
+                        "last_modified": mtime.isoformat(timespec="seconds"),
+                        "days_since_modified": days_ago,
+                        "stale": days_ago >= WIP_STALE_DAYS,
+                    })
+
+    results.sort(key=lambda x: x["last_modified"], reverse=True)
+    return results
+
+
+# ---------------------------------------------------------------------------
 # MCP tool registration (thin wrappers — no root param exposed to MCP clients)
 # ---------------------------------------------------------------------------
 
@@ -389,6 +446,12 @@ def tool_list_resources(domain: str = "", with_links: bool = False) -> list:
 def tool_add_file_to_project(project_path: str, title: str, content: str) -> dict:
     """Add a file to an existing project and update the index.md file list."""
     return add_file_to_project(project_path, title, content, root=REPO_ROOT)
+
+
+@mcp.tool(name="get_wip")
+def tool_get_wip(bucket: str = "Projects", domain: str = "") -> list:
+    """Return items sorted by most-recently-modified with stale flags. bucket: Projects/Areas/Resources."""
+    return get_wip(bucket=bucket, domain=domain or None, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
