@@ -1210,6 +1210,11 @@ class TestReviveItem:
         result = server.archive_item("Work/Projects/2026-09-Deep/index.md", root=tmp_path)
         assert result["ok"] is False
 
+    def test_archive_rejects_invalid_bucket_in_path(self, tmp_path):
+        result = server.archive_item("Work/EvilBucket/2026-09-Target", root=tmp_path)
+        assert result["ok"] is False
+        assert "Invalid bucket" in result["error"]
+
     def test_revive_rejects_path_not_under_archives(self, tmp_path):
         make_project(tmp_path, "Work", "2026-09-Live")
         result = server.revive_item("Work/Projects/2026-09-Live", root=tmp_path)

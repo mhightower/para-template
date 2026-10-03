@@ -359,6 +359,8 @@ def archive_item(name: str, root: Optional[Path] = None) -> dict:
         if len(parts) != 3 or ".." in parts or any(p == "" for p in parts):
             return {"ok": False, "error": "Path must be exactly <domain>/<bucket>/<item>"}
         domain, bucket, item_name = parts[0], parts[1], parts[2]
+        if bucket not in ("Projects", "Areas", "Resources", "Archives"):
+            return {"ok": False, "error": f"Invalid bucket '{bucket}'; must be Projects, Areas, Resources, or Archives"}
         src = r / domain / bucket / item_name
         if not src.exists():
             return {"ok": False, "error": f"'{name}' not found"}
