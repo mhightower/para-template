@@ -1238,3 +1238,23 @@ class TestRespondToStalenessNudge:
         )
         assert result["ok"] is False
         assert "already exists" in result["error"]
+
+    def test_rejects_path_traversal(self, tmp_path):
+        result = server.respond_to_staleness_nudge(
+            "../etc/passwd", "continue", root=tmp_path
+        )
+        assert result["ok"] is False
+
+    def test_rejects_nested_path_with_extra_segment(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Deep")
+        result = server.respond_to_staleness_nudge(
+            "Work/Projects/2026-09-Deep/index.md", "continue", root=tmp_path
+        )
+        assert result["ok"] is False
+
+    def test_rejects_areas_path_for_continue(self, tmp_path):
+        (tmp_path / "Work" / "Areas" / "MyArea").mkdir(parents=True)
+        result = server.respond_to_staleness_nudge(
+            "Work/Areas/MyArea", "continue", root=tmp_path
+        )
+        assert result["ok"] is False
