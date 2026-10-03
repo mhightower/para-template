@@ -1074,3 +1074,167 @@ class TestDueDates:
         result = server.unset_due("Work/Projects/2026-09-NoDeadline", root=tmp_path)
         assert result["ok"] is False
         assert "No Deadline field" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# staleness_nudge / respond_to_staleness_nudge (issue #17)
+# ---------------------------------------------------------------------------
+
+class TestStalenessNudge:
+    def test_returns_stale_projects(self, tmp_path):
+        proj = make_project(tmp_path, "Work", "2026-09-Old")
+        age_file(proj / "index.md", 35)
+        result = server.staleness_nudge(threshold_days=30, root=tmp_path)
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert "2026-09-Old" in result[0]["name"]
+
+    def test_excludes_recent_projects(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Recent")
+        result = server.staleness_nudge(threshold_days=30, root=tmp_path)
+        assert result == []
+
+    def test_result_includes_days_since_activity(self, tmp_path):
+        proj = make_project(tmp_path, "Work", "2026-09-Old")
+        age_file(proj / "index.md", 35)
+        result = server.staleness_nudge(threshold_days=30, root=tmp_path)
+        assert "days_since_modified" in result[0]
+        assert result[0]["days_since_modified"] >= 35
+
+    def test_result_includes_path_and_name(self, tmp_path):
+        proj = make_project(tmp_path, "Work", "2026-09-Old")
+        age_file(proj / "index.md", 35)
+        result = server.staleness_nudge(threshold_days=30, root=tmp_path)
+        assert "path" in result[0]
+        assert "name" in result[0]
+
+    def test_default_threshold_is_30_days(self, tmp_path):
+        proj29 = make_project(tmp_path, "Work", "2026-09-Fresh")
+        age_file(proj29 / "index.md", 29)
+        proj31 = make_project(tmp_path, "Work", "2026-09-Stale")
+        age_file(proj31 / "index.md", 31)
+        result = server.staleness_nudge(root=tmp_path)
+        names = [r["name"] for r in result]
+        assert "2026-09-Stale" in names
+        assert "2026-09-Fresh" not in names
+
+    def test_per_project_threshold_in_index(self, tmp_path):
+        proj = tmp_path / "Work" / "Projects" / "2026-09-Custom"
+        proj.mkdir(parents=True)
+        (proj / "index.md").write_text(
+            "# 2026-09-Custom\n\n"
+            "**Status:** Active\n**Deadline:** 2026-12-31\n"
+            "**Goal:** TBD\n**Next Action:** TBD\n"
+            "**Staleness Threshold:** 60\n"
+        )
+        age_file(proj / "index.md", 35)
+        result = server.staleness_nudge(threshold_days=30, root=tmp_path)
+        # 35 days old but threshold is 60 → should NOT appear
+        names = [r["name"] for r in result]
+        assert "2026-09-Custom" not in names
+
+    def test_per_project_threshold_triggers_when_exceeded(self, tmp_path):
+        proj = tmp_path / "Work" / "Projects" / "2026-09-Custom"
+        proj.mkdir(parents=True)
+        (proj / "index.md").write_text(
+            "# 2026-09-Custom\n\n"
+            "**Status:** Active\n**Deadline:** 2026-12-31\n"
+            "**Goal:** TBD\n**Next Action:** TBD\n"
+            "**Staleness Threshold:** 20\n"
+        )
+        age_file(proj / "index.md", 25)
+        result = server.staleness_nudge(threshold_days=30, root=tmp_path)
+        names = [r["name"] for r in result]
+        assert "2026-09-Custom" in names
+
+    def test_multiple_projects_across_domains(self, tmp_path):
+        p1 = make_project(tmp_path, "Work", "2026-09-A")
+        p2 = make_project(tmp_path, "Personal", "2026-09-B")
+        age_file(p1 / "index.md", 35)
+        age_file(p2 / "index.md", 35)
+        result = server.staleness_nudge(threshold_days=30, root=tmp_path)
+        assert len(result) == 2
+
+    def test_tool_wrapper_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        result = server.tool_staleness_nudge()
+        assert isinstance(result, list)
+
+
+class TestRespondToStalenessNudge:
+    def test_archive_action_moves_to_archives(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Done")
+        result = server.respond_to_staleness_nudge(
+            "Work/Projects/2026-09-Done", "archive", root=tmp_path
+        )
+        assert result["ok"] is True
+        assert (tmp_path / "Work" / "Archives" / "2026-09-Done").exists()
+
+    def test_continue_action_updates_mtime(self, tmp_path):
+        proj = make_project(tmp_path, "Work", "2026-09-Continue")
+        age_file(proj / "index.md", 35)
+        result = server.respond_to_staleness_nudge(
+            "Work/Projects/2026-09-Continue", "continue", root=tmp_path
+        )
+        assert result["ok"] is True
+        # After continue, project should no longer be stale
+        nudge = server.staleness_nudge(threshold_days=30, root=tmp_path)
+        names = [n["name"] for n in nudge]
+        assert "2026-09-Continue" not in names
+
+    def test_convert_to_area_moves_to_areas(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-ToArea")
+        result = server.respond_to_staleness_nudge(
+            "Work/Projects/2026-09-ToArea", "convert-to-area", root=tmp_path
+        )
+        assert result["ok"] is True
+        assert (tmp_path / "Work" / "Areas" / "2026-09-ToArea").exists()
+        assert not (tmp_path / "Work" / "Projects" / "2026-09-ToArea").exists()
+
+    def test_invalid_action_returns_error(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-X")
+        result = server.respond_to_staleness_nudge(
+            "Work/Projects/2026-09-X", "invalid-action", root=tmp_path
+        )
+        assert result["ok"] is False
+        assert "action" in result["error"].lower()
+
+    def test_nonexistent_path_returns_error(self, tmp_path):
+        result = server.respond_to_staleness_nudge(
+            "Work/Projects/2026-09-Missing", "archive", root=tmp_path
+        )
+        assert result["ok"] is False
+
+    def test_result_includes_source_and_dest(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Moving")
+        result = server.respond_to_staleness_nudge(
+            "Work/Projects/2026-09-Moving", "convert-to-area", root=tmp_path
+        )
+        assert result["ok"] is True
+        assert "path" in result
+
+    def test_tool_wrapper_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        make_project(tmp_path, "Work", "2026-09-Test")
+        result = server.tool_respond_to_staleness_nudge(
+            "Work/Projects/2026-09-Test", "continue"
+        )
+        assert result["ok"] is True
+
+    def test_convert_to_area_rejects_wrong_path(self, tmp_path):
+        (tmp_path / "Work" / "Areas").mkdir(parents=True)
+        (tmp_path / "Work" / "Areas" / "MyArea").mkdir()
+        result = server.respond_to_staleness_nudge(
+            "Work/Areas/MyArea", "convert-to-area", root=tmp_path
+        )
+        assert result["ok"] is False
+        assert "Projects" in result["error"]
+
+    def test_convert_to_area_rejects_duplicate_area(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Dup")
+        (tmp_path / "Work" / "Areas" / "2026-09-Dup").mkdir(parents=True)
+        result = server.respond_to_staleness_nudge(
+            "Work/Projects/2026-09-Dup", "convert-to-area", root=tmp_path
+        )
+        assert result["ok"] is False
+        assert "already exists" in result["error"]
