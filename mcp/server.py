@@ -307,6 +307,177 @@ def add_link_to_resource(resource_path: str, url: str, label: str = "",
     return {"ok": True, "path": str(file_path.relative_to(r))}
 
 
+def _audit(action: str, source: str, destination: str, root: Path) -> None:
+    """Append a line to the PARA audit log."""
+    log = root / ".para-audit.log"
+    ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    with log.open("a") as f:
+        f.write(f"{ts}  {action}  {source}  ->  {destination}\n")
+
+
+def _find_items_by_name(name: str, exclude_bucket: str,
+                        root: Path) -> list:
+    """Return a list of dicts with path, domain, bucket, and kind matching name."""
+    matches = []
+    for domain_dir in sorted(root.iterdir()):
+        if not domain_dir.is_dir() or domain_dir.name.startswith((".", "_")):
+            continue
+        for bucket in ("Projects", "Areas", "Resources", "Archives"):
+            if bucket == exclude_bucket:
+                continue
+            bucket_dir = domain_dir / bucket
+            if not bucket_dir.exists():
+                continue
+            # folder match
+            candidate_dir = bucket_dir / name
+            if candidate_dir.is_dir():
+                matches.append({
+                    "path": str(candidate_dir.relative_to(root)),
+                    "domain": domain_dir.name,
+                    "bucket": bucket,
+                    "kind": "folder",
+                })
+            # file match
+            candidate_file = bucket_dir / f"{name}.md"
+            if candidate_file.is_file():
+                matches.append({
+                    "path": str(candidate_file.relative_to(root)),
+                    "domain": domain_dir.name,
+                    "bucket": bucket,
+                    "kind": "file",
+                })
+    return matches
+
+
+def archive_item(name: str, root: Optional[Path] = None) -> dict:
+    """Archive any PARA item by name (or full path) in one step."""
+    r = root if root is not None else REPO_ROOT
+
+    # full path passed directly
+    if "/" in name:
+        parts = Path(name).parts
+        if len(parts) != 3 or ".." in parts or any(p == "" for p in parts):
+            return {"ok": False, "error": "Path must be exactly <domain>/<bucket>/<item>"}
+        domain, bucket, item_name = parts[0], parts[1], parts[2]
+        if bucket not in ("Projects", "Areas", "Resources", "Archives"):
+            return {"ok": False, "error": f"Invalid bucket '{bucket}'; must be Projects, Areas, Resources, or Archives"}
+        src = r / domain / bucket / item_name
+        if not src.exists():
+            return {"ok": False, "error": f"'{name}' not found"}
+        matches = [{"path": str(src.relative_to(r)), "domain": domain, "bucket": bucket,
+                    "kind": "folder" if src.is_dir() else "file"}]
+    else:
+        matches = _find_items_by_name(name, exclude_bucket="Archives", root=r)
+
+    if not matches:
+        return {"ok": False, "error": f"'{name}' not found in any PARA bucket"}
+    if len(matches) > 1:
+        return {"ok": False, "ambiguous": True, "matches": matches}
+
+    match = matches[0]
+    src = r / match["path"]
+    domain, bucket, item_name = match["domain"], match["bucket"], src.name
+    dest_dir = r / domain / "Archives"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / item_name
+
+    # record original bucket
+    if match["kind"] == "folder":
+        index = src / "index.md"
+        if index.exists():
+            text = index.read_text().rstrip("\n")
+            if "**Original Bucket:**" not in text:
+                index.write_text(text + f"\n**Original Bucket:** {bucket}\n")
+    else:
+        text = src.read_text().rstrip("\n")
+        if "**Original Bucket:**" not in text:
+            src.write_text(text + f"\n**Original Bucket:** {bucket}\n")
+
+    shutil.move(str(src), str(dest))
+    source_path = match["path"]
+    dest_path = f"{domain}/Archives/{item_name}"
+    _audit("archive", source_path, dest_path, r)
+    return {"ok": True, "source": source_path, "destination": dest_path}
+
+
+def _find_in_archives(name: str, root: Path) -> list:
+    """Return matches for name inside Archives buckets."""
+    matches = []
+    for domain_dir in sorted(root.iterdir()):
+        if not domain_dir.is_dir() or domain_dir.name.startswith((".", "_")):
+            continue
+        arch_dir = domain_dir / "Archives"
+        if not arch_dir.exists():
+            continue
+        candidate_dir = arch_dir / name
+        if candidate_dir.is_dir():
+            matches.append({
+                "path": str(candidate_dir.relative_to(root)),
+                "domain": domain_dir.name,
+                "kind": "folder",
+            })
+        candidate_file = arch_dir / f"{name}.md"
+        if candidate_file.is_file():
+            matches.append({
+                "path": str(candidate_file.relative_to(root)),
+                "domain": domain_dir.name,
+                "kind": "file",
+            })
+    return matches
+
+
+def revive_item(name: str, root: Optional[Path] = None) -> dict:
+    """Restore an archived PARA item to its original bucket in one step."""
+    r = root if root is not None else REPO_ROOT
+
+    if "/" in name:
+        parts = Path(name).parts
+        if len(parts) != 3 or parts[1] != "Archives" or ".." in parts or any(p == "" for p in parts):
+            return {"ok": False, "error": "Path must be exactly <domain>/Archives/<item>"}
+        domain, item_name = parts[0], parts[2]
+        src = r / domain / "Archives" / item_name
+        if not src.exists():
+            return {"ok": False, "error": f"'{name}' not found in Archives"}
+        matches = [{"path": str(src.relative_to(r)), "domain": domain,
+                    "kind": "folder" if src.is_dir() else "file"}]
+    else:
+        matches = _find_in_archives(name, r)
+
+    if not matches:
+        return {"ok": False, "error": f"'{name}' not found in Archives"}
+    if len(matches) > 1:
+        return {"ok": False, "ambiguous": True, "matches": matches}
+
+    match = matches[0]
+    src = r / match["path"]
+    domain = match["domain"]
+    item_name = src.name
+
+    # determine original bucket
+    valid_buckets = {"Projects", "Areas", "Resources"}
+    if match["kind"] == "folder":
+        index = src / "index.md"
+        if index.exists():
+            m = re.search(r"\*\*Original Bucket:\*\*\s*(.+)", index.read_text())
+            original_bucket = m.group(1).strip() if m else "Projects"
+        else:
+            original_bucket = "Projects"
+    else:
+        m = re.search(r"\*\*Original Bucket:\*\*\s*(.+)", src.read_text())
+        original_bucket = m.group(1).strip() if m else "Areas"
+    if original_bucket not in valid_buckets:
+        original_bucket = "Projects"
+
+    dest_dir = r / domain / original_bucket
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / item_name
+    shutil.move(str(src), str(dest))
+    source_path = match["path"]
+    dest_path = f"{domain}/{original_bucket}/{item_name}"
+    _audit("revive", source_path, dest_path, r)
+    return {"ok": True, "source": source_path, "destination": dest_path}
+
+
 def list_resources(domain: Optional[str] = None, with_links: bool = False,
                    root: Optional[Path] = None) -> list:
     """List all resources across domains (or one domain), optionally including their links."""
@@ -573,6 +744,8 @@ def tool_capture_to_inbox(content: str, tags: Optional[list] = None) -> dict:
 def tool_suggest_triage(inbox_file: str) -> dict:
     """Suggest which Project/Area/Resource an inbox item belongs to."""
     return suggest_triage(inbox_file, root=REPO_ROOT)
+
+
 @mcp.tool(name="set_due")
 def tool_set_due(project_path: str, due_date: str) -> dict:
     """Set or update the deadline on a project. due_date: YYYY-MM-DD."""
@@ -595,6 +768,18 @@ def tool_list_due(domain: str = "") -> list:
 def tool_get_upcoming_deadlines(days: int = 7, domain: str = "") -> list:
     """Return projects with deadlines within the next N days (default 7)."""
     return get_upcoming_deadlines(days=days, domain=domain or None, root=REPO_ROOT)
+
+
+@mcp.tool(name="archive_item")
+def tool_archive_item(name: str) -> dict:
+    """Archive any PARA item by name or path in one step."""
+    return archive_item(name, root=REPO_ROOT)
+
+
+@mcp.tool(name="revive_item")
+def tool_revive_item(name: str) -> dict:
+    """Restore an archived PARA item to its original bucket in one step."""
+    return revive_item(name, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------

@@ -1074,3 +1074,189 @@ class TestDueDates:
         result = server.unset_due("Work/Projects/2026-09-NoDeadline", root=tmp_path)
         assert result["ok"] is False
         assert "No Deadline field" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# archive_item / revive_item (issue #18: One-command archive and revive)
+# ---------------------------------------------------------------------------
+
+class TestArchiveItem:
+    def test_archives_project_by_name(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Target")
+        result = server.archive_item("2026-09-Target", root=tmp_path)
+        assert result["ok"] is True
+        assert (tmp_path / "Work" / "Archives" / "2026-09-Target").exists()
+
+    def test_result_includes_source_and_dest(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Target")
+        result = server.archive_item("2026-09-Target", root=tmp_path)
+        assert "source" in result
+        assert "destination" in result
+
+    def test_archives_by_full_path(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Full")
+        result = server.archive_item("Work/Projects/2026-09-Full", root=tmp_path)
+        assert result["ok"] is True
+
+    def test_disambiguation_on_multiple_matches(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Same")
+        make_project(tmp_path, "Personal", "2026-09-Same")
+        result = server.archive_item("2026-09-Same", root=tmp_path)
+        assert result.get("ambiguous") is True
+        assert "matches" in result
+        assert len(result["matches"]) == 2
+
+    def test_error_on_no_match(self, tmp_path):
+        result = server.archive_item("NoSuchItem", root=tmp_path)
+        assert result["ok"] is False
+        assert "not found" in result["error"].lower()
+
+    def test_archives_area_file(self, tmp_path):
+        (tmp_path / "Work" / "Areas").mkdir(parents=True)
+        (tmp_path / "Work" / "Areas" / "Health.md").write_text("# Health\n")
+        result = server.archive_item("Health", root=tmp_path)
+        assert result["ok"] is True
+        assert (tmp_path / "Work" / "Archives" / "Health.md").exists()
+
+    def test_writes_audit_log(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Audited")
+        server.archive_item("2026-09-Audited", root=tmp_path)
+        log = (tmp_path / ".para-audit.log")
+        assert log.exists()
+        text = log.read_text()
+        assert "archive" in text.lower()
+        assert "2026-09-Audited" in text
+
+    def test_skips_archives_bucket_in_search(self, tmp_path):
+        arch = tmp_path / "Work" / "Archives" / "2026-09-AlreadyArchived"
+        arch.mkdir(parents=True)
+        (arch / "index.md").write_text("# Old\n")
+        result = server.archive_item("2026-09-AlreadyArchived", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_tool_wrapper_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        make_project(tmp_path, "Work", "2026-09-T")
+        result = server.tool_archive_item("2026-09-T")
+        assert result["ok"] is True
+
+
+class TestReviveItem:
+    def test_revives_project_from_archives(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Revive")
+        server.archive_item("2026-09-Revive", root=tmp_path)
+        result = server.revive_item("2026-09-Revive", root=tmp_path)
+        assert result["ok"] is True
+        assert (tmp_path / "Work" / "Projects" / "2026-09-Revive").exists()
+
+    def test_result_includes_source_and_destination(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-R2")
+        server.archive_item("2026-09-R2", root=tmp_path)
+        result = server.revive_item("2026-09-R2", root=tmp_path)
+        assert "source" in result
+        assert "destination" in result
+
+    def test_error_on_no_archived_match(self, tmp_path):
+        result = server.revive_item("NoSuchItem", root=tmp_path)
+        assert result["ok"] is False
+        assert "not found" in result["error"].lower()
+
+    def test_disambiguation_on_multiple_archived_matches(self, tmp_path):
+        for domain in ("Work", "Personal"):
+            arch = tmp_path / domain / "Archives" / "2026-09-Same"
+            arch.mkdir(parents=True)
+            (arch / "index.md").write_text(
+                f"# Same\n\n**Status:** Active\n**Deadline:** 2026-12-31\n"
+                f"**Goal:** TBD\n**Next Action:** TBD\n"
+                f"**Original Bucket:** Projects\n"
+            )
+        result = server.revive_item("2026-09-Same", root=tmp_path)
+        assert result.get("ambiguous") is True
+        assert len(result["matches"]) == 2
+
+    def test_writes_audit_log_on_revive(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-AuditRevive")
+        server.archive_item("2026-09-AuditRevive", root=tmp_path)
+        server.revive_item("2026-09-AuditRevive", root=tmp_path)
+        log = (tmp_path / ".para-audit.log")
+        text = log.read_text()
+        assert "revive" in text.lower()
+
+    def test_revives_area_file(self, tmp_path):
+        (tmp_path / "Work" / "Areas").mkdir(parents=True)
+        (tmp_path / "Work" / "Areas" / "Health.md").write_text("# Health\n")
+        server.archive_item("Health", root=tmp_path)
+        result = server.revive_item("Health", root=tmp_path)
+        assert result["ok"] is True
+
+    def test_tool_wrapper_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        make_project(tmp_path, "Work", "2026-09-TV")
+        server.archive_item("2026-09-TV", root=tmp_path)
+        result = server.tool_revive_item("2026-09-TV")
+        assert result["ok"] is True
+
+    def test_archive_by_path_not_found(self, tmp_path):
+        result = server.archive_item("Work/Projects/Missing", root=tmp_path)
+        assert result["ok"] is False
+        assert "not found" in result["error"].lower()
+
+    def test_archive_rejects_traversal_path(self, tmp_path):
+        result = server.archive_item("../../../etc/passwd", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_archive_rejects_extra_segments_in_path(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Deep")
+        result = server.archive_item("Work/Projects/2026-09-Deep/index.md", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_archive_rejects_invalid_bucket_in_path(self, tmp_path):
+        result = server.archive_item("Work/EvilBucket/2026-09-Target", root=tmp_path)
+        assert result["ok"] is False
+        assert "Invalid bucket" in result["error"]
+
+    def test_revive_rejects_path_not_under_archives(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Live")
+        result = server.revive_item("Work/Projects/2026-09-Live", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_revive_rejects_traversal_path(self, tmp_path):
+        result = server.revive_item("../../../etc/passwd", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_revive_folder_without_index_defaults_to_projects(self, tmp_path):
+        arch = tmp_path / "Work" / "Archives" / "2026-09-NoIndex"
+        arch.mkdir(parents=True)
+        result = server.revive_item("2026-09-NoIndex", root=tmp_path)
+        assert result["ok"] is True
+        assert (tmp_path / "Work" / "Projects" / "2026-09-NoIndex").exists()
+
+    def test_archive_by_short_path_error(self, tmp_path):
+        (tmp_path / "Work").mkdir(parents=True)
+        (tmp_path / "Work" / "item").mkdir()
+        result = server.archive_item("Work/item", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_archive_skips_non_dir_root_items(self, tmp_path):
+        (tmp_path / "README.md").write_text("top level")
+        make_project(tmp_path, "Work", "2026-09-OK")
+        result = server.archive_item("2026-09-OK", root=tmp_path)
+        assert result["ok"] is True
+
+    def test_revive_by_full_path(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-FP")
+        server.archive_item("2026-09-FP", root=tmp_path)
+        result = server.revive_item("Work/Archives/2026-09-FP", root=tmp_path)
+        assert result["ok"] is True
+
+    def test_revive_by_path_not_found(self, tmp_path):
+        result = server.revive_item("Work/Archives/Missing", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_revive_skips_domain_with_no_archives(self, tmp_path):
+        # domain with no Archives dir at all
+        (tmp_path / "Empty").mkdir()
+        make_project(tmp_path, "Work", "2026-09-A")
+        server.archive_item("2026-09-A", root=tmp_path)
+        result = server.revive_item("2026-09-A", root=tmp_path)
+        assert result["ok"] is True
