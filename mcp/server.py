@@ -478,6 +478,110 @@ def revive_item(name: str, root: Optional[Path] = None) -> dict:
     return {"ok": True, "source": source_path, "destination": dest_path}
 
 
+VALID_DIGEST_PERIODS = {"daily", "weekly"}
+
+
+def generate_digest(period: str = "daily", root: Optional[Path] = None) -> dict:
+    """Generate a structured daily or weekly PARA digest.
+
+    Sections: deadlines, next_actions, waiting, area_flags, recent_items.
+    Weekly adds stale_alerts. Empty periods return a nothing_new dict.
+    """
+    if period not in VALID_DIGEST_PERIODS:
+        return {"ok": False, "error": f"Invalid period '{period}'. Must be one of: {', '.join(sorted(VALID_DIGEST_PERIODS))}"}
+
+    r = root if root is not None else REPO_ROOT
+    today = date.today()
+    projects = list_projects(root=r)
+
+    deadlines = []
+    next_actions = []
+    waiting = []
+
+    for p in projects:
+        # read next_action from index.md
+        index_path = r / p["path"] / "index.md"
+        parsed = _parse_index(index_path) if index_path.exists() else {}
+        next_action = parsed.get("next_action", "TBD")
+
+        deadline_str = p.get("deadline", "")
+        if deadline_str:
+            try:
+                deadline = date.fromisoformat(deadline_str)
+                delta = (deadline - today).days
+                if delta <= 3:
+                    deadlines.append({
+                        "name": p["name"],
+                        "deadline": deadline_str,
+                        "deadline_relative": p.get("deadline_relative", ""),
+                        "path": p["path"],
+                    })
+            except ValueError:
+                pass
+
+        if p.get("status") == "Active":
+            next_actions.append({
+                "name": p["name"],
+                "next_action": next_action,
+                "path": p["path"],
+            })
+        elif p.get("status") == "Waiting":
+            waiting.append({"name": p["name"], "next_action": next_action, "path": p["path"]})
+
+    # area flags
+    area_flags = []
+    for domain_dir in sorted(r.iterdir()):
+        if not domain_dir.is_dir() or domain_dir.name.startswith((".", "_")):
+            continue
+        areas_dir = domain_dir / "Areas"
+        if not areas_dir.exists():
+            continue
+        for md_file in areas_dir.rglob("*.md"):
+            text = md_file.read_text(errors="replace")
+            if re.search(r"\b(TODO|Follow up|Check back)\b", text, re.IGNORECASE):
+                area_flags.append({
+                    "name": md_file.stem,
+                    "path": str(md_file.relative_to(r)),
+                })
+
+    # recent items: modified within threshold window
+    threshold = 1 if period == "daily" else 7
+    recent_items = []
+    for domain_dir in sorted(r.iterdir()):
+        if not domain_dir.is_dir() or domain_dir.name.startswith((".", "_")):
+            continue
+        for bucket in ("Projects", "Areas", "Resources"):
+            bucket_dir = domain_dir / bucket
+            if not bucket_dir.exists():
+                continue
+            for md_file in bucket_dir.rglob("*.md"):
+                mtime = datetime.fromtimestamp(md_file.stat().st_mtime)
+                days_since = (datetime.now() - mtime).days
+                if days_since < threshold:
+                    recent_items.append({
+                        "name": md_file.stem,
+                        "path": str(md_file.relative_to(r)),
+                        "bucket": bucket,
+                    })
+
+    if not deadlines and not next_actions and not waiting and not area_flags and not recent_items:
+        return {"nothing_new": True, "message": "Nothing new to report."}
+
+    result = {
+        "period": period,
+        "deadlines": deadlines,
+        "next_actions": next_actions,
+        "waiting": waiting,
+        "area_flags": area_flags,
+        "recent_items": recent_items,
+    }
+
+    if period == "weekly":
+        result["stale_alerts"] = weekly_review(root=r)
+
+    return result
+
+
 def list_resources(domain: Optional[str] = None, with_links: bool = False,
                    root: Optional[Path] = None) -> list:
     """List all resources across domains (or one domain), optionally including their links."""
@@ -868,6 +972,12 @@ def tool_revive_item(name: str) -> dict:
 def tool_find_items(query: str) -> dict:
     """Search all PARA buckets with a natural-language query. Returns ranked results."""
     return find_items(query, root=REPO_ROOT)
+
+
+@mcp.tool(name="generate_digest")
+def tool_generate_digest(period: str = "daily") -> dict:
+    """Generate a daily or weekly PARA digest. Trigger on demand with /digest."""
+    return generate_digest(period=period, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
