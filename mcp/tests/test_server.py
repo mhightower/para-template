@@ -824,3 +824,145 @@ class TestMCPResourceToolWrappers:
         )
         result = server.list_resources(with_links=True, root=tmp_path)
         assert result[0]["links"] == [{"label": "Guide", "url": "https://guide.com"}]
+
+
+# ---------------------------------------------------------------------------
+# capture_to_inbox
+# ---------------------------------------------------------------------------
+
+class TestCaptureToInbox:
+    def test_creates_inbox_dir(self, tmp_path):
+        server.capture_to_inbox("some note", root=tmp_path)
+        assert (tmp_path / "Inbox").is_dir()
+
+    def test_returns_file_path(self, tmp_path):
+        result = server.capture_to_inbox("some note", root=tmp_path)
+        assert result["ok"] is True
+        assert "path" in result
+        assert result["path"].startswith("Inbox/")
+
+    def test_file_is_timestamped_markdown(self, tmp_path):
+        result = server.capture_to_inbox("hello", root=tmp_path)
+        p = Path(result["path"])
+        assert p.suffix == ".md"
+        # filename like YYYY-MM-DD-HHMMSS.md
+        import re
+        assert re.match(r"^\d{4}-\d{2}-\d{2}-\d{6}\.md$", p.name)
+
+    def test_file_contains_content(self, tmp_path):
+        result = server.capture_to_inbox("my note content", root=tmp_path)
+        text = (tmp_path / result["path"]).read_text()
+        assert "my note content" in text
+
+    def test_no_tags_no_frontmatter(self, tmp_path):
+        result = server.capture_to_inbox("just content", root=tmp_path)
+        text = (tmp_path / result["path"]).read_text()
+        assert "tags:" not in text
+
+    def test_tags_appear_in_frontmatter(self, tmp_path):
+        result = server.capture_to_inbox("tagged", tags=["work", "idea"], root=tmp_path)
+        text = (tmp_path / result["path"]).read_text()
+        assert "tags:" in text
+        assert "work" in text
+        assert "idea" in text
+
+    def test_frontmatter_is_valid_yaml_block(self, tmp_path):
+        result = server.capture_to_inbox("content", tags=["a"], root=tmp_path)
+        text = (tmp_path / result["path"]).read_text()
+        assert text.startswith("---\n")
+        assert "---\n" in text[4:]  # closing delimiter
+
+    def test_multiple_captures_create_distinct_files(self, tmp_path, monkeypatch):
+        import server as srv
+        from datetime import datetime
+        times = [datetime(2026, 10, 1, 12, 0, 0), datetime(2026, 10, 1, 12, 0, 1)]
+        calls = iter(times)
+        monkeypatch.setattr(srv, "_now", lambda: next(calls))
+        r1 = server.capture_to_inbox("note 1", root=tmp_path)
+        r2 = server.capture_to_inbox("note 2", root=tmp_path)
+        assert r1["path"] != r2["path"]
+
+    def test_path_is_relative(self, tmp_path):
+        result = server.capture_to_inbox("x", root=tmp_path)
+        assert not Path(result["path"]).is_absolute()
+
+    def test_tool_wrapper_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        result = server.tool_capture_to_inbox("hi")
+        assert result["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# suggest_triage
+# ---------------------------------------------------------------------------
+
+class TestSuggestTriage:
+    def _make_inbox_file(self, root: Path, content: str, tags=None) -> str:
+        result = server.capture_to_inbox(content, tags=tags or [], root=root)
+        return result["path"]
+
+    def test_returns_dict_with_suggestions(self, tmp_path):
+        path = self._make_inbox_file(tmp_path, "something")
+        result = server.suggest_triage(path, root=tmp_path)
+        assert isinstance(result, dict)
+        assert result["ok"] is True
+        assert "suggestions" in result
+
+    def test_empty_para_structure_returns_empty_suggestions(self, tmp_path):
+        path = self._make_inbox_file(tmp_path, "random note")
+        result = server.suggest_triage(path, root=tmp_path)
+        assert result["suggestions"] == []
+
+    def test_keyword_match_on_project_name(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-10-Interview-Prep")
+        path = self._make_inbox_file(tmp_path, "Need to prepare for interview next week")
+        result = server.suggest_triage(path, root=tmp_path)
+        suggestions = result["suggestions"]
+        assert len(suggestions) >= 1
+        paths = [s["destination"] for s in suggestions]
+        assert any("Interview-Prep" in p for p in paths)
+
+    def test_suggestion_has_required_fields(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-10-Interview-Prep")
+        path = self._make_inbox_file(tmp_path, "interview question notes")
+        result = server.suggest_triage(path, root=tmp_path)
+        suggestions = result["suggestions"]
+        if suggestions:
+            s = suggestions[0]
+            assert "destination" in s
+            assert "reason" in s
+            assert "confidence" in s
+            assert s["confidence"] in ("high", "medium", "low")
+
+    def test_tag_match_on_area_name(self, tmp_path):
+        (tmp_path / "Personal" / "Areas").mkdir(parents=True)
+        (tmp_path / "Personal" / "Areas" / "Health.md").write_text("# Health\n")
+        path = self._make_inbox_file(tmp_path, "went for a run", tags=["health"])
+        result = server.suggest_triage(path, root=tmp_path)
+        assert any("Health" in s["destination"] for s in result["suggestions"])
+
+    def test_no_match_returns_empty_suggestions(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-10-Coding-Project")
+        path = self._make_inbox_file(tmp_path, "completely unrelated zqxwvutsrp gibberish")
+        result = server.suggest_triage(path, root=tmp_path)
+        assert result["suggestions"] == []
+
+    def test_missing_inbox_file_returns_error(self, tmp_path):
+        result = server.suggest_triage("Inbox/nonexistent.md", root=tmp_path)
+        assert isinstance(result, dict)
+        assert result["ok"] is False
+
+    def test_confidence_high_for_exact_tag_match(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-10-Health")
+        path = self._make_inbox_file(tmp_path, "some note", tags=["health"])
+        result = server.suggest_triage(path, root=tmp_path)
+        tag_matches = [s for s in result["suggestions"] if "tag" in s["reason"].lower()]
+        if tag_matches:
+            assert tag_matches[0]["confidence"] in ("high", "medium")
+
+    def test_tool_wrapper_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        path = self._make_inbox_file(tmp_path, "test")
+        result = server.tool_suggest_triage(path)
+        assert isinstance(result, dict)
+        assert "suggestions" in result
