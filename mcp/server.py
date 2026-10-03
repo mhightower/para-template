@@ -3,6 +3,7 @@
 Repo root is resolved from this file's location: Path(__file__).parent.parent.
 All file operations are relative to that root; no absolute paths from config.
 """
+import json
 import re
 import shutil
 from datetime import date, datetime
@@ -14,6 +15,7 @@ from mcp.server.mcpserver import MCPServer
 REPO_ROOT = Path(__file__).parent.parent
 
 VALID_STATUSES = {"Active", "On Hold", "Waiting", "Complete"}
+VALID_PROGRESS_STATUSES = {"planning", "active", "blocked", "review"}
 VALID_BUCKETS = {"Projects", "Areas", "Resources", "Archives"}
 PROJECT_NAME_RE = re.compile(r"^\d{4}-\d{2}-.+$")
 STALE_DAYS = 14
@@ -39,11 +41,11 @@ def _ensure_dated_name(name: str) -> str:
 
 
 def _parse_index(index_path: Path) -> dict:
-    """Extract Status, Deadline, Goal, and Next Action fields from an index.md."""
+    """Extract Status, Deadline, Goal, Next Action, and Progress fields from an index.md."""
     text = index_path.read_text()
     result = {}
-    for field in ("Status", "Deadline", "Goal", "Next Action"):
-        m = re.search(rf"\*\*{field}:\*\*\s*(.+)", text)
+    for field in ("Status", "Deadline", "Goal", "Next Action", "Progress"):
+        m = re.search(rf"\*\*{field}:\*\*[ \t]*([^\n]*)", text)
         result[field.lower().replace(" ", "_")] = m.group(1).strip() if m else ""
     return result
 
@@ -173,6 +175,7 @@ def list_projects(domain: Optional[str] = None, root: Optional[Path] = None) -> 
                 "domain": d.name,
                 "name": proj.name,
                 "status": data["status"],
+                "progress": data["progress"],
                 "deadline": data["deadline"],
                 "deadline_relative": _format_deadline_relative(data["deadline"]),
                 "days_since_modified": days_since,
@@ -331,6 +334,58 @@ def list_resources(domain: Optional[str] = None, with_links: bool = False,
 
 
 # ---------------------------------------------------------------------------
+# Progress status and project log (issue #28)
+# ---------------------------------------------------------------------------
+
+PROJECT_LOG_FILE = ".para-log.json"
+PROJECT_LOG_LIMIT = 5
+
+
+def set_progress_status(project_path: str, status: str,
+                        root: Optional[Path] = None) -> dict:
+    """Set the Progress field in a project's index.md and append to project log."""
+    if status not in VALID_PROGRESS_STATUSES:
+        allowed = ", ".join(sorted(VALID_PROGRESS_STATUSES))
+        return {"ok": False, "error": f"Invalid progress status '{status}'. Allowed: {allowed}"}
+    r = root if root is not None else REPO_ROOT
+    index = r / project_path / "index.md"
+    if not index.exists():
+        return {"ok": False, "error": f"Project not found at '{project_path}'"}
+    text = index.read_text()
+    if "**Progress:**" in text:
+        text = re.sub(r"\*\*Progress:\*\*[^\n]*", f"**Progress:** {status}", text)
+    else:
+        text = text.rstrip("\n") + f"\n**Progress:** {status}\n"
+    index.write_text(text)
+    log_path = r / project_path / PROJECT_LOG_FILE
+    log = json.loads(log_path.read_text()) if log_path.exists() else []
+    log.append({"progress": status, "timestamp": datetime.now().isoformat(timespec="seconds")})
+    log_path.write_text(json.dumps(log[-PROJECT_LOG_LIMIT:]))
+    return {"ok": True, "path": project_path, "progress": status}
+
+
+def filter_projects_by_progress(status: str, domain: Optional[str] = None,
+                                 root: Optional[Path] = None) -> list:
+    """Return projects filtered by their Progress field value."""
+    if status not in VALID_PROGRESS_STATUSES:
+        allowed = ", ".join(sorted(VALID_PROGRESS_STATUSES))
+        return {"ok": False, "error": f"Invalid progress status '{status}'. Allowed: {allowed}"}
+    return [p for p in list_projects(domain=domain, root=root) if p.get("progress") == status]
+
+
+def get_project_log(project_path: str, root: Optional[Path] = None) -> list:
+    """Return the last 5 progress status changes for a project."""
+    r = root if root is not None else REPO_ROOT
+    proj_dir = r / project_path
+    if not (proj_dir / "index.md").exists():
+        return {"ok": False, "error": f"Project not found at '{project_path}'"}
+    log_path = proj_dir / PROJECT_LOG_FILE
+    if not log_path.exists():
+        return []
+    return json.loads(log_path.read_text())
+
+
+# ---------------------------------------------------------------------------
 # MCP tool registration (thin wrappers — no root param exposed to MCP clients)
 # ---------------------------------------------------------------------------
 
@@ -389,6 +444,24 @@ def tool_list_resources(domain: str = "", with_links: bool = False) -> list:
 def tool_add_file_to_project(project_path: str, title: str, content: str) -> dict:
     """Add a file to an existing project and update the index.md file list."""
     return add_file_to_project(project_path, title, content, root=REPO_ROOT)
+
+
+@mcp.tool(name="set_progress_status")
+def tool_set_progress_status(project_path: str, status: str) -> dict:
+    """Set progress status on a project: planning | active | blocked | review."""
+    return set_progress_status(project_path, status, root=REPO_ROOT)
+
+
+@mcp.tool(name="filter_projects_by_progress")
+def tool_filter_projects_by_progress(status: str, domain: str = "") -> list:
+    """Filter projects by progress status (planning|active|blocked|review)."""
+    return filter_projects_by_progress(status, domain=domain or None, root=REPO_ROOT)
+
+
+@mcp.tool(name="get_project_log")
+def tool_get_project_log(project_path: str) -> list:
+    """Return the last 5 progress status changes for a project."""
+    return get_project_log(project_path, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
