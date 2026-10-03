@@ -9,9 +9,11 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
+import yaml
 from mcp.server.mcpserver import MCPServer
 
 REPO_ROOT = Path(__file__).parent.parent
+BUILTIN_TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 VALID_STATUSES = {"Active", "On Hold", "Waiting", "Complete"}
 VALID_BUCKETS = {"Projects", "Areas", "Resources", "Archives"}
@@ -331,6 +333,68 @@ def list_resources(domain: Optional[str] = None, with_links: bool = False,
 
 
 # ---------------------------------------------------------------------------
+# Templates (issue #21)
+# ---------------------------------------------------------------------------
+
+def _load_template(name: str, root: Optional[Path] = None) -> Optional[dict]:
+    """Load a template by name from builtin or repo templates/ directory."""
+    search_dirs = [BUILTIN_TEMPLATES_DIR]
+    if root is not None:
+        search_dirs.insert(0, root / "templates")
+    for d in search_dirs:
+        p = d / f"{name}.yaml"
+        if p.exists():
+            return yaml.safe_load(p.read_text())
+    return None
+
+
+def list_templates(root: Optional[Path] = None) -> list:
+    """Return all available templates (builtin + user-defined in <root>/templates/)."""
+    seen = {}
+    search_dirs = [BUILTIN_TEMPLATES_DIR]
+    if root is not None:
+        search_dirs.append(root / "templates")
+    for d in search_dirs:
+        if not d.exists():
+            continue
+        for p in sorted(d.glob("*.yaml")):
+            data = yaml.safe_load(p.read_text())
+            seen[data.get("name", p.stem)] = {
+                "name": data.get("name", p.stem),
+                "description": data.get("description", ""),
+            }
+    return list(seen.values())
+
+
+def create_project_from_template(domain: str, name: str, template_name: str,
+                                  deadline: str, goal: str = "TBD",
+                                  next_action: str = "TBD",
+                                  root: Optional[Path] = None) -> dict:
+    """Create a project scaffolded from a named template."""
+    template = _load_template(template_name, root)
+    if template is None:
+        available = [t["name"] for t in list_templates(root)]
+        return {"ok": False, "error": f"Template '{template_name}' not found",
+                "available_templates": available}
+    result = create_project(domain, name, deadline, goal, next_action, root=root)
+    if not result["ok"]:
+        return result
+    r = root if root is not None else REPO_ROOT
+    proj_dir = r / result["path"]
+    created_files = [result["path"] + "/index.md"]
+    for sub in template.get("subfolders", []):
+        (proj_dir / sub).mkdir(parents=True, exist_ok=True)
+        created_files.append(result["path"] + f"/{sub}/")
+    checklist = template.get("checklist", [])
+    if checklist:
+        index_path = proj_dir / "index.md"
+        text = index_path.read_text().rstrip("\n")
+        checklist_md = "\n".join(f"- {item}" for item in checklist)
+        index_path.write_text(text + f"\n\n## Checklist\n\n{checklist_md}\n")
+    return {"ok": True, "path": result["path"], "template": template_name, "files": created_files}
+
+
+# ---------------------------------------------------------------------------
 # MCP tool registration (thin wrappers — no root param exposed to MCP clients)
 # ---------------------------------------------------------------------------
 
@@ -389,6 +453,21 @@ def tool_list_resources(domain: str = "", with_links: bool = False) -> list:
 def tool_add_file_to_project(project_path: str, title: str, content: str) -> dict:
     """Add a file to an existing project and update the index.md file list."""
     return add_file_to_project(project_path, title, content, root=REPO_ROOT)
+
+
+@mcp.tool(name="list_templates")
+def tool_list_templates() -> list:
+    """List all available project templates (builtin and user-defined)."""
+    return list_templates()
+
+
+@mcp.tool(name="create_project_from_template")
+def tool_create_project_from_template(domain: str, name: str, template_name: str,
+                                       deadline: str, goal: str = "TBD",
+                                       next_action: str = "TBD") -> dict:
+    """Create a project from a named template, scaffolding subfolders and checklist."""
+    return create_project_from_template(domain, name, template_name, deadline,
+                                        goal, next_action, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------

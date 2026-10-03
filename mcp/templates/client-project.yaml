@@ -1,0 +1,13 @@
+name: client-project
+description: Standard structure for a new client engagement
+subfolders:
+  - contracts
+  - deliverables
+  - notes
+  - resources
+checklist:
+  - "[ ] Initial kickoff call scheduled"
+  - "[ ] Scope and deliverables defined"
+  - "[ ] Project folder structure confirmed"
+  - "[ ] First status update sent to client"
+  - "[ ] Success criteria documented"
