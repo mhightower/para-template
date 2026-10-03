@@ -340,7 +340,7 @@ def list_resources(domain: Optional[str] = None, with_links: bool = False,
 # Inbox capture and triage
 # ---------------------------------------------------------------------------
 
-def capture_to_inbox(content: str, tags: list = None,
+def capture_to_inbox(content: str, tags: Optional[list] = None,
                      root: Optional[Path] = None) -> dict:
     """File raw content into Inbox/ with a timestamped filename and optional tag frontmatter."""
     r = root if root is not None else REPO_ROOT
@@ -401,7 +401,7 @@ def _extract_tags_from_inbox(text: str) -> list:
     return tags
 
 
-def suggest_triage(inbox_file: str, root: Optional[Path] = None) -> dict | list:
+def suggest_triage(inbox_file: str, root: Optional[Path] = None) -> dict:
     """Read an inbox file and suggest PARA destinations based on keyword/tag matching."""
     r = root if root is not None else REPO_ROOT
     file_path = r / inbox_file
@@ -442,7 +442,7 @@ def suggest_triage(inbox_file: str, root: Optional[Path] = None) -> dict | list:
             })
 
     suggestions.sort(key=lambda s: {"high": 0, "medium": 1, "low": 2}[s["confidence"]])
-    return suggestions
+    return {"ok": True, "suggestions": suggestions}
 
 
 # ---------------------------------------------------------------------------
@@ -507,13 +507,13 @@ def tool_add_file_to_project(project_path: str, title: str, content: str) -> dic
 
 
 @mcp.tool(name="capture_to_inbox")
-def tool_capture_to_inbox(content: str, tags: list = None) -> dict:
+def tool_capture_to_inbox(content: str, tags: Optional[list] = None) -> dict:
     """Drop raw content into Inbox/ without choosing a project or area upfront."""
     return capture_to_inbox(content, tags=tags or [], root=REPO_ROOT)
 
 
 @mcp.tool(name="suggest_triage")
-def tool_suggest_triage(inbox_file: str) -> dict | list:
+def tool_suggest_triage(inbox_file: str) -> dict:
     """Suggest which Project/Area/Resource an inbox item belongs to."""
     return suggest_triage(inbox_file, root=REPO_ROOT)
 

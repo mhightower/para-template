@@ -901,30 +901,34 @@ class TestSuggestTriage:
         result = server.capture_to_inbox(content, tags=tags or [], root=root)
         return result["path"]
 
-    def test_returns_list(self, tmp_path):
+    def test_returns_dict_with_suggestions(self, tmp_path):
         path = self._make_inbox_file(tmp_path, "something")
         result = server.suggest_triage(path, root=tmp_path)
-        assert isinstance(result, list)
+        assert isinstance(result, dict)
+        assert result["ok"] is True
+        assert "suggestions" in result
 
-    def test_empty_para_structure_returns_empty_list(self, tmp_path):
+    def test_empty_para_structure_returns_empty_suggestions(self, tmp_path):
         path = self._make_inbox_file(tmp_path, "random note")
         result = server.suggest_triage(path, root=tmp_path)
-        assert result == []
+        assert result["suggestions"] == []
 
     def test_keyword_match_on_project_name(self, tmp_path):
         make_project(tmp_path, "Work", "2026-10-Interview-Prep")
         path = self._make_inbox_file(tmp_path, "Need to prepare for interview next week")
         result = server.suggest_triage(path, root=tmp_path)
-        assert len(result) >= 1
-        paths = [s["destination"] for s in result]
+        suggestions = result["suggestions"]
+        assert len(suggestions) >= 1
+        paths = [s["destination"] for s in suggestions]
         assert any("Interview-Prep" in p for p in paths)
 
     def test_suggestion_has_required_fields(self, tmp_path):
         make_project(tmp_path, "Work", "2026-10-Interview-Prep")
         path = self._make_inbox_file(tmp_path, "interview question notes")
         result = server.suggest_triage(path, root=tmp_path)
-        if result:
-            s = result[0]
+        suggestions = result["suggestions"]
+        if suggestions:
+            s = suggestions[0]
             assert "destination" in s
             assert "reason" in s
             assert "confidence" in s
@@ -935,13 +939,13 @@ class TestSuggestTriage:
         (tmp_path / "Personal" / "Areas" / "Health.md").write_text("# Health\n")
         path = self._make_inbox_file(tmp_path, "went for a run", tags=["health"])
         result = server.suggest_triage(path, root=tmp_path)
-        assert any("Health" in s["destination"] for s in result)
+        assert any("Health" in s["destination"] for s in result["suggestions"])
 
-    def test_no_match_returns_empty(self, tmp_path):
+    def test_no_match_returns_empty_suggestions(self, tmp_path):
         make_project(tmp_path, "Work", "2026-10-Coding-Project")
         path = self._make_inbox_file(tmp_path, "completely unrelated zqxwvutsrp gibberish")
         result = server.suggest_triage(path, root=tmp_path)
-        assert result == []
+        assert result["suggestions"] == []
 
     def test_missing_inbox_file_returns_error(self, tmp_path):
         result = server.suggest_triage("Inbox/nonexistent.md", root=tmp_path)
@@ -952,7 +956,7 @@ class TestSuggestTriage:
         make_project(tmp_path, "Work", "2026-10-Health")
         path = self._make_inbox_file(tmp_path, "some note", tags=["health"])
         result = server.suggest_triage(path, root=tmp_path)
-        tag_matches = [s for s in result if "tag" in s["reason"].lower()]
+        tag_matches = [s for s in result["suggestions"] if "tag" in s["reason"].lower()]
         if tag_matches:
             assert tag_matches[0]["confidence"] in ("high", "medium")
 
@@ -960,4 +964,5 @@ class TestSuggestTriage:
         monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
         path = self._make_inbox_file(tmp_path, "test")
         result = server.tool_suggest_triage(path)
-        assert isinstance(result, list)
+        assert isinstance(result, dict)
+        assert "suggestions" in result
