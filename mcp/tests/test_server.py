@@ -1201,6 +1201,31 @@ class TestReviveItem:
         assert result["ok"] is False
         assert "not found" in result["error"].lower()
 
+    def test_archive_rejects_traversal_path(self, tmp_path):
+        result = server.archive_item("../../../etc/passwd", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_archive_rejects_extra_segments_in_path(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Deep")
+        result = server.archive_item("Work/Projects/2026-09-Deep/index.md", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_revive_rejects_path_not_under_archives(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-Live")
+        result = server.revive_item("Work/Projects/2026-09-Live", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_revive_rejects_traversal_path(self, tmp_path):
+        result = server.revive_item("../../../etc/passwd", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_revive_folder_without_index_defaults_to_projects(self, tmp_path):
+        arch = tmp_path / "Work" / "Archives" / "2026-09-NoIndex"
+        arch.mkdir(parents=True)
+        result = server.revive_item("2026-09-NoIndex", root=tmp_path)
+        assert result["ok"] is True
+        assert (tmp_path / "Work" / "Projects" / "2026-09-NoIndex").exists()
+
     def test_archive_by_short_path_error(self, tmp_path):
         (tmp_path / "Work").mkdir(parents=True)
         (tmp_path / "Work" / "item").mkdir()

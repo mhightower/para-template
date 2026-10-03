@@ -317,7 +317,7 @@ def _audit(action: str, source: str, destination: str, root: Path) -> None:
 
 def _find_items_by_name(name: str, exclude_bucket: str,
                         root: Path) -> list:
-    """Return a list of (path, domain, bucket, item_path) tuples matching name."""
+    """Return a list of dicts with path, domain, bucket, and kind matching name."""
     matches = []
     for domain_dir in sorted(root.iterdir()):
         if not domain_dir.is_dir() or domain_dir.name.startswith((".", "_")):
@@ -355,14 +355,14 @@ def archive_item(name: str, root: Optional[Path] = None) -> dict:
 
     # full path passed directly
     if "/" in name:
-        src = r / name
+        parts = Path(name).parts
+        if len(parts) != 3 or ".." in parts or any(p == "" for p in parts):
+            return {"ok": False, "error": "Path must be exactly <domain>/<bucket>/<item>"}
+        domain, bucket, item_name = parts[0], parts[1], parts[2]
+        src = r / domain / bucket / item_name
         if not src.exists():
             return {"ok": False, "error": f"'{name}' not found"}
-        parts = Path(name).parts
-        if len(parts) < 3:
-            return {"ok": False, "error": "Path must be <domain>/<bucket>/<item>"}
-        domain, bucket, item_name = parts[0], parts[1], parts[2]
-        matches = [{"path": name, "domain": domain, "bucket": bucket,
+        matches = [{"path": str(src.relative_to(r)), "domain": domain, "bucket": bucket,
                     "kind": "folder" if src.is_dir() else "file"}]
     else:
         matches = _find_items_by_name(name, exclude_bucket="Archives", root=r)
@@ -370,7 +370,7 @@ def archive_item(name: str, root: Optional[Path] = None) -> dict:
     if not matches:
         return {"ok": False, "error": f"'{name}' not found in any PARA bucket"}
     if len(matches) > 1:
-        return {"ambiguous": True, "matches": matches}
+        return {"ok": False, "ambiguous": True, "matches": matches}
 
     match = matches[0]
     src = r / match["path"]
@@ -429,13 +429,14 @@ def revive_item(name: str, root: Optional[Path] = None) -> dict:
     r = root if root is not None else REPO_ROOT
 
     if "/" in name:
-        src = r / name
+        parts = Path(name).parts
+        if len(parts) != 3 or parts[1] != "Archives" or ".." in parts or any(p == "" for p in parts):
+            return {"ok": False, "error": "Path must be exactly <domain>/Archives/<item>"}
+        domain, item_name = parts[0], parts[2]
+        src = r / domain / "Archives" / item_name
         if not src.exists():
             return {"ok": False, "error": f"'{name}' not found in Archives"}
-        parts = Path(name).parts
-        domain = parts[0]
-        item_name = src.name
-        matches = [{"path": name, "domain": domain,
+        matches = [{"path": str(src.relative_to(r)), "domain": domain,
                     "kind": "folder" if src.is_dir() else "file"}]
     else:
         matches = _find_in_archives(name, r)
@@ -443,7 +444,7 @@ def revive_item(name: str, root: Optional[Path] = None) -> dict:
     if not matches:
         return {"ok": False, "error": f"'{name}' not found in Archives"}
     if len(matches) > 1:
-        return {"ambiguous": True, "matches": matches}
+        return {"ok": False, "ambiguous": True, "matches": matches}
 
     match = matches[0]
     src = r / match["path"]
@@ -451,15 +452,19 @@ def revive_item(name: str, root: Optional[Path] = None) -> dict:
     item_name = src.name
 
     # determine original bucket
-    original_bucket = None
+    valid_buckets = {"Projects", "Areas", "Resources"}
     if match["kind"] == "folder":
         index = src / "index.md"
         if index.exists():
             m = re.search(r"\*\*Original Bucket:\*\*\s*(.+)", index.read_text())
             original_bucket = m.group(1).strip() if m else "Projects"
+        else:
+            original_bucket = "Projects"
     else:
         m = re.search(r"\*\*Original Bucket:\*\*\s*(.+)", src.read_text())
         original_bucket = m.group(1).strip() if m else "Areas"
+    if original_bucket not in valid_buckets:
+        original_bucket = "Projects"
 
     dest_dir = r / domain / original_bucket
     dest_dir.mkdir(parents=True, exist_ok=True)
