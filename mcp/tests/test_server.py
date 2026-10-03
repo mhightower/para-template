@@ -824,3 +824,76 @@ class TestMCPResourceToolWrappers:
         )
         result = server.list_resources(with_links=True, root=tmp_path)
         assert result[0]["links"] == [{"label": "Guide", "url": "https://guide.com"}]
+
+
+# ---------------------------------------------------------------------------
+# create_project_from_template (issue #21)
+# ---------------------------------------------------------------------------
+
+class TestProjectTemplates:
+    def test_list_templates_returns_builtin(self, tmp_path):
+        templates = server.list_templates()
+        names = [t["name"] for t in templates]
+        assert "client-project" in names
+
+    def test_list_templates_includes_description(self, tmp_path):
+        templates = server.list_templates()
+        client = next(t for t in templates if t["name"] == "client-project")
+        assert "description" in client
+
+    def test_create_from_template_creates_project(self, tmp_path):
+        result = server.create_project_from_template(
+            "Work", "2026-10-MyClient", "client-project", "2027-01-01", root=tmp_path
+        )
+        assert result["ok"] is True
+        assert (tmp_path / "Work" / "Projects" / "2026-10-MyClient").is_dir()
+
+    def test_create_from_template_creates_subfolders(self, tmp_path):
+        server.create_project_from_template(
+            "Work", "2026-10-Acme", "client-project", "2027-01-01", root=tmp_path
+        )
+        proj = tmp_path / "Work" / "Projects" / "2026-10-Acme"
+        for sub in ("contracts", "deliverables", "notes", "resources"):
+            assert (proj / sub).is_dir(), f"Missing subfolder: {sub}"
+
+    def test_create_from_template_adds_checklist(self, tmp_path):
+        server.create_project_from_template(
+            "Work", "2026-10-CheckCo", "client-project", "2027-01-01", root=tmp_path
+        )
+        text = (tmp_path / "Work" / "Projects" / "2026-10-CheckCo" / "index.md").read_text()
+        assert "[ ]" in text
+
+    def test_create_from_template_returns_file_tree(self, tmp_path):
+        result = server.create_project_from_template(
+            "Work", "2026-10-Tree", "client-project", "2027-01-01", root=tmp_path
+        )
+        assert "files" in result
+        assert len(result["files"]) > 0
+
+    def test_unknown_template_returns_available_list(self, tmp_path):
+        result = server.create_project_from_template(
+            "Work", "2026-10-X", "nonexistent-template", "2027-01-01", root=tmp_path
+        )
+        assert result["ok"] is False
+        assert "available_templates" in result
+
+    def test_user_template_in_repo_is_discovered(self, tmp_path):
+        # Place a user template in the repo templates dir
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        import yaml
+        (tpl_dir / "my-custom.yaml").write_text(
+            yaml.dump({"name": "my-custom", "description": "Custom", "subfolders": [], "checklist": []})
+        )
+        templates = server.list_templates(root=tmp_path)
+        names = [t["name"] for t in templates]
+        assert "my-custom" in names
+
+    def test_create_from_template_rejects_duplicate_project(self, tmp_path):
+        server.create_project_from_template(
+            "Work", "2026-10-Dup", "client-project", "2027-01-01", root=tmp_path
+        )
+        result = server.create_project_from_template(
+            "Work", "2026-10-Dup", "client-project", "2027-01-01", root=tmp_path
+        )
+        assert result["ok"] is False
