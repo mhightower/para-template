@@ -1260,3 +1260,143 @@ class TestReviveItem:
         server.archive_item("2026-09-A", root=tmp_path)
         result = server.revive_item("2026-09-A", root=tmp_path)
         assert result["ok"] is True
+
+# find_items (issue #16: Natural-language search and retrieval)
+# ---------------------------------------------------------------------------
+
+class TestFindItems:
+    def _setup_vault(self, tmp_path: Path) -> None:
+        # Projects
+        proj = tmp_path / "Work" / "Projects" / "2026-09-Johnson-Contract"
+        proj.mkdir(parents=True)
+        (proj / "index.md").write_text(
+            "# 2026-09-Johnson-Contract\n\n"
+            "**Status:** Active\n**Deadline:** 2026-12-31\n"
+            "**Goal:** Close deal\n**Next Action:** Send proposal\n"
+        )
+        (proj / "notes.md").write_text("Details about the Johnson contract negotiation.")
+
+        # Resources
+        res = tmp_path / "Work" / "Resources"
+        res.mkdir(parents=True)
+        (res / "Meeting-Notes.md").write_text("# Meeting Notes\nQuarterly review discussion.")
+
+        # Areas
+        area = tmp_path / "Personal" / "Areas"
+        area.mkdir(parents=True)
+        (area / "Health.md").write_text("# Health\nWeekly exercise routine notes.")
+
+        # Archives
+        arch = tmp_path / "Work" / "Archives" / "2025-Old-Project"
+        arch.mkdir(parents=True)
+        (arch / "index.md").write_text("# Old Project\nCompleted legacy work.")
+
+    def test_returns_list(self, tmp_path):
+        self._setup_vault(tmp_path)
+        results = server.find_items("Johnson", root=tmp_path)
+        assert isinstance(results, list)
+
+    def test_finds_by_filename(self, tmp_path):
+        self._setup_vault(tmp_path)
+        results = server.find_items("Meeting-Notes", root=tmp_path)
+        paths = [r["path"] for r in results]
+        assert any("Meeting-Notes" in p for p in paths)
+
+    def test_finds_by_content(self, tmp_path):
+        self._setup_vault(tmp_path)
+        results = server.find_items("Johnson contract", root=tmp_path)
+        assert len(results) > 0
+        assert any("Johnson" in r["path"] or "Johnson" in r["excerpt"] for r in results)
+
+    def test_result_has_required_fields(self, tmp_path):
+        self._setup_vault(tmp_path)
+        results = server.find_items("Johnson", root=tmp_path)
+        assert len(results) > 0
+        r = results[0]
+        assert "title" in r
+        assert "path" in r
+        assert "bucket" in r
+        assert "excerpt" in r
+
+    def test_bucket_field_is_valid_para_bucket(self, tmp_path):
+        self._setup_vault(tmp_path)
+        results = server.find_items("Johnson", root=tmp_path)
+        for r in results:
+            assert r["bucket"] in {"Projects", "Areas", "Resources", "Archives"}
+
+    def test_searches_across_all_buckets(self, tmp_path):
+        self._setup_vault(tmp_path)
+        results_proj = server.find_items("Johnson", root=tmp_path)
+        results_area = server.find_items("exercise", root=tmp_path)
+        results_res = server.find_items("Quarterly", root=tmp_path)
+        results_arch = server.find_items("legacy", root=tmp_path)
+        assert len(results_proj) > 0
+        assert len(results_area) > 0
+        assert len(results_res) > 0
+        assert len(results_arch) > 0
+
+    def test_empty_result_returns_helpful_message(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.find_items("xyznonexistent", root=tmp_path)
+        assert isinstance(result, dict)
+        assert "message" in result
+        assert "suggestions" in result
+
+    def test_excerpt_is_short_string(self, tmp_path):
+        self._setup_vault(tmp_path)
+        results = server.find_items("Johnson", root=tmp_path)
+        for r in results:
+            assert isinstance(r["excerpt"], str)
+            assert len(r["excerpt"]) <= 200
+
+    def test_results_ranked_by_relevance(self, tmp_path):
+        self._setup_vault(tmp_path)
+        # "Johnson" appears in both filename and content of the project files
+        results = server.find_items("Johnson", root=tmp_path)
+        # file with "Johnson" in filename should rank highly
+        top_path = results[0]["path"]
+        assert "Johnson" in top_path
+
+    def test_case_insensitive_search(self, tmp_path):
+        self._setup_vault(tmp_path)
+        results_lower = server.find_items("johnson", root=tmp_path)
+        results_upper = server.find_items("JOHNSON", root=tmp_path)
+        assert len(results_lower) > 0
+        assert len(results_upper) > 0
+
+    def test_multi_word_query_matches_partial(self, tmp_path):
+        self._setup_vault(tmp_path)
+        results = server.find_items("health exercise", root=tmp_path)
+        assert any("Health" in r["path"] for r in results)
+
+    def test_path_is_relative(self, tmp_path):
+        self._setup_vault(tmp_path)
+        results = server.find_items("Johnson", root=tmp_path)
+        for r in results:
+            assert not Path(r["path"]).is_absolute()
+
+    def test_title_matches_filename_or_heading(self, tmp_path):
+        self._setup_vault(tmp_path)
+        results = server.find_items("Meeting-Notes", root=tmp_path)
+        assert len(results) > 0
+        assert any("Meeting" in r["title"] for r in results)
+
+    def test_completes_quickly(self, tmp_path):
+        self._setup_vault(tmp_path)
+        import time
+        start = time.time()
+        server.find_items("Johnson", root=tmp_path)
+        elapsed = time.time() - start
+        assert elapsed < 3.0
+
+    def test_tool_wrapper_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        result = server.tool_find_items("xyznonexistent")
+        assert isinstance(result, (list, dict))
+
+    def test_skips_files_in_root(self, tmp_path):
+        self._setup_vault(tmp_path)
+        (tmp_path / "README.md").write_text("top level file")
+        results = server.find_items("Johnson", root=tmp_path)
+        assert isinstance(results, list)
+        assert len(results) > 0
