@@ -507,6 +507,88 @@ def list_resources(domain: Optional[str] = None, with_links: bool = False,
     return results
 
 
+def find_items(query: str, root: Optional[Path] = None) -> dict:
+    """Search all PARA buckets for items matching the natural-language query.
+
+    Returns a dict with ok=True and results list, or ok=False with a message
+    and suggestions when nothing matches or query is empty.
+    """
+    r = root if root is not None else REPO_ROOT
+    terms = [t.lower() for t in query.split() if t]
+
+    if not terms:
+        return {
+            "ok": False,
+            "message": "Query is empty.",
+            "suggestions": [
+                "Enter one or more keywords to search.",
+                "Try a project name, area, or topic.",
+            ],
+        }
+
+    def _score(filename: str, text: str) -> int:
+        name_lower = filename.lower()
+        text_lower = text.lower()
+        score = 0
+        for term in terms:
+            score += name_lower.count(term) * 3  # filename match weighted higher
+            score += text_lower.count(term)
+        return score
+
+    def _excerpt(text: str, terms: list) -> str:
+        lower = text.lower()
+        best_pos = None
+        for term in terms:
+            idx = lower.find(term)
+            if idx != -1 and (best_pos is None or idx < best_pos):
+                best_pos = idx
+        if best_pos is None:
+            best_pos = 0
+        start = max(0, best_pos - 40)
+        snippet = text[start:start + 160].strip()
+        return snippet[:200]
+
+    results = []
+    for domain_dir in sorted(r.iterdir()):
+        if not domain_dir.is_dir() or domain_dir.name.startswith((".", "_")):
+            continue
+        for bucket in ("Projects", "Areas", "Resources", "Archives"):
+            bucket_dir = domain_dir / bucket
+            if not bucket_dir.exists():
+                continue
+            for md_file in bucket_dir.rglob("*.md"):
+                text = md_file.read_text(errors="replace")
+                score = _score(md_file.stem, text)
+                if score == 0:
+                    continue
+                # derive title from first heading or filename
+                m = re.search(r"^#\s+(.+)", text, re.MULTILINE)
+                title = m.group(1).strip() if m else md_file.stem
+                results.append({
+                    "title": title,
+                    "path": str(md_file.relative_to(r)),
+                    "bucket": bucket,
+                    "excerpt": _excerpt(text, terms),
+                    "_score": score,
+                })
+
+    if not results:
+        return {
+            "ok": False,
+            "message": f"No results found for '{query}'.",
+            "suggestions": [
+                "Try broader or different keywords.",
+                "Check spelling of project or file names.",
+                "Use a single keyword to widen the search.",
+            ],
+        }
+
+    results.sort(key=lambda x: x["_score"], reverse=True)
+    for item in results:
+        del item["_score"]
+    return {"ok": True, "results": results}
+
+
 # ---------------------------------------------------------------------------
 # Inbox capture and triage
 # ---------------------------------------------------------------------------
@@ -780,6 +862,12 @@ def tool_archive_item(name: str) -> dict:
 def tool_revive_item(name: str) -> dict:
     """Restore an archived PARA item to its original bucket in one step."""
     return revive_item(name, root=REPO_ROOT)
+
+
+@mcp.tool(name="find_items")
+def tool_find_items(query: str) -> dict:
+    """Search all PARA buckets with a natural-language query. Returns ranked results."""
+    return find_items(query, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
