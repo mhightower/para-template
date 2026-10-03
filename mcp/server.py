@@ -587,17 +587,29 @@ def generate_digest(period: str = "daily", root: Optional[Path] = None) -> dict:
 def staleness_nudge(threshold_days: int = 30, root: Optional[Path] = None) -> list:
     """Return projects whose last modification exceeds threshold_days.
 
-    Respects a per-project **Staleness Threshold:** N field in index.md.
+    Staleness is based on the most recent mtime across all files in the project
+    directory (not just index.md). Respects a per-project **Staleness Threshold:**
+    N field in index.md.
     """
     r = root if root is not None else REPO_ROOT
     results = []
     for proj in list_projects(root=r):
-        index_path = r / proj["path"] / "index.md"
+        proj_dir = r / proj["path"]
+        index_path = proj_dir / "index.md"
         text = index_path.read_text() if index_path.exists() else ""
         m = re.search(r"\*\*Staleness Threshold:\*\*\s*(\d+)", text)
         effective_threshold = int(m.group(1)) if m else threshold_days
-        if proj["days_since_modified"] >= effective_threshold:
-            results.append(proj)
+        # use most recent mtime across all files in the project dir
+        all_files = list(proj_dir.rglob("*"))
+        if all_files:
+            newest_mtime = max(f.stat().st_mtime for f in all_files if f.is_file())
+            days_since = (datetime.now() - datetime.fromtimestamp(newest_mtime)).days
+        else:
+            days_since = proj["days_since_modified"]
+        if days_since >= effective_threshold:
+            entry = dict(proj)
+            entry["days_since_modified"] = days_since
+            results.append(entry)
     return results
 
 
@@ -612,8 +624,13 @@ def respond_to_staleness_nudge(path: str, action: str,
             "ok": False,
             "error": f"Invalid action '{action}'. Must be one of: {', '.join(sorted(VALID_NUDGE_ACTIONS))}",
         }
+    # Validate path is exactly <domain>/Projects/<name> (relative, no traversal)
+    parts = Path(path).parts
+    if (len(parts) != 3 or parts[1] != "Projects"
+            or ".." in parts or any(p == "" for p in parts)):
+        return {"ok": False, "error": "Path must be exactly <domain>/Projects/<name>"}
     r = root if root is not None else REPO_ROOT
-    src = r / path
+    src = r / parts[0] / "Projects" / parts[2]
     if not src.exists():
         return {"ok": False, "error": f"Path '{path}' not found"}
 
