@@ -584,6 +584,117 @@ def generate_digest(period: str = "daily", root: Optional[Path] = None) -> dict:
     return result
 
 
+WIKI_LINK_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
+
+
+def _extract_wiki_links(text: str) -> list:
+    """Return all [[name]] targets from text."""
+    return WIKI_LINK_RE.findall(text)
+
+
+def _resolve_link_path(name: str, root: Path) -> Optional[str]:
+    """Return the relative path for a wiki-link name, or None if not found."""
+    for domain_dir in root.iterdir():
+        if not domain_dir.is_dir() or domain_dir.name.startswith((".", "_")):
+            continue
+        for bucket in ("Projects", "Areas", "Resources", "Archives"):
+            bucket_dir = domain_dir / bucket
+            if not bucket_dir.exists():
+                continue
+            folder = bucket_dir / name
+            if folder.is_dir():
+                return str(folder.relative_to(root))
+            md_file = bucket_dir / f"{name}.md"
+            if md_file.is_file():
+                return str(md_file.relative_to(root))
+    return None
+
+
+def _find_item_path(name: str, root: Path) -> Optional[Path]:
+    """Return the Path object for an item (folder index.md or .md file) by name."""
+    for domain_dir in root.iterdir():
+        if not domain_dir.is_dir() or domain_dir.name.startswith((".", "_")):
+            continue
+        for bucket in ("Projects", "Areas", "Resources", "Archives"):
+            bucket_dir = domain_dir / bucket
+            if not bucket_dir.exists():
+                continue
+            folder = bucket_dir / name
+            if folder.is_dir():
+                idx = folder / "index.md"
+                return idx if idx.exists() else folder
+            md_file = bucket_dir / f"{name}.md"
+            if md_file.is_file():
+                return md_file
+    return None
+
+
+def list_links(item_name: str, root: Optional[Path] = None) -> dict:
+    """List all forward and back references for a PARA item.
+
+    Forward links are [[...]] targets found in the item's content.
+    Backlinks are files across all buckets that contain [[item_name]].
+    """
+    r = root if root is not None else REPO_ROOT
+    item_path = _find_item_path(item_name, r)
+    if item_path is None:
+        return {"ok": False, "error": f"Item '{item_name}' not found"}
+
+    text = item_path.read_text(errors="replace")
+    link_names = _extract_wiki_links(text)
+    forward_links = [
+        {"name": n, "path": _resolve_link_path(n, r)}
+        for n in link_names
+    ]
+
+    backlinks = []
+    for domain_dir in sorted(r.iterdir()):
+        if not domain_dir.is_dir() or domain_dir.name.startswith((".", "_")):
+            continue
+        for bucket in ("Projects", "Areas", "Resources", "Archives"):
+            bucket_dir = domain_dir / bucket
+            if not bucket_dir.exists():
+                continue
+            for md_file in bucket_dir.rglob("*.md"):
+                if md_file == item_path:
+                    continue
+                content = md_file.read_text(errors="replace")
+                if f"[[{item_name}]]" in content:
+                    backlinks.append({
+                        "name": md_file.stem,
+                        "path": str(md_file.relative_to(r)),
+                    })
+
+    return {
+        "item": item_name,
+        "path": str(item_path.relative_to(r)),
+        "forward_links": forward_links,
+        "backlinks": backlinks,
+    }
+
+
+def lint_links(root: Optional[Path] = None) -> list:
+    """Return all broken [[wiki-links]] across the PARA vault."""
+    r = root if root is not None else REPO_ROOT
+    broken = []
+    for domain_dir in sorted(r.iterdir()):
+        if not domain_dir.is_dir() or domain_dir.name.startswith((".", "_")):
+            continue
+        for bucket in ("Projects", "Areas", "Resources", "Archives"):
+            bucket_dir = domain_dir / bucket
+            if not bucket_dir.exists():
+                continue
+            for md_file in bucket_dir.rglob("*.md"):
+                text = md_file.read_text(errors="replace")
+                for name in _extract_wiki_links(text):
+                    if _resolve_link_path(name, r) is None:
+                        broken.append({
+                            "source_path": str(md_file.relative_to(r)),
+                            "link_name": name,
+                        })
+    return broken
+
+
 def list_resources(domain: Optional[str] = None, with_links: bool = False,
                    root: Optional[Path] = None) -> list:
     """List all resources across domains (or one domain), optionally including their links."""
@@ -980,6 +1091,18 @@ def tool_find_items(query: str) -> dict:
 def tool_generate_digest(period: str = "daily") -> dict:
     """Generate a daily or weekly PARA digest. Trigger on demand with /digest."""
     return generate_digest(period=period, root=REPO_ROOT)
+
+
+@mcp.tool(name="list_links")
+def tool_list_links(item_name: str) -> dict:
+    """List all forward and back [[wiki-link]] references for a PARA item."""
+    return list_links(item_name, root=REPO_ROOT)
+
+
+@mcp.tool(name="lint_links")
+def tool_lint_links() -> list:
+    """Return all broken [[wiki-links]] across the vault."""
+    return lint_links(root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
