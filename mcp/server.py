@@ -49,7 +49,7 @@ def _parse_index(index_path: Path) -> dict:
     text = index_path.read_text()
     result = {}
     for field in ("Status", "Deadline", "Goal", "Next Action"):
-        m = re.search(rf"\*\*{field}:\*\*\s*(.+)", text)
+        m = re.search(rf"\*\*{field}:\*\*[ \t]*([^\n]*)", text)
         result[field.lower().replace(" ", "_")] = m.group(1).strip() if m else ""
     return result
 
@@ -443,6 +443,63 @@ def suggest_triage(inbox_file: str, root: Optional[Path] = None) -> dict:
 
     suggestions.sort(key=lambda s: {"high": 0, "medium": 1, "low": 2}[s["confidence"]])
     return {"ok": True, "suggestions": suggestions}
+# Due-dates (issue #26)
+# ---------------------------------------------------------------------------
+
+def set_due(project_path: str, due_date: str, root: Optional[Path] = None) -> dict:
+    """Set or update the Deadline field in a project's index.md."""
+    try:
+        date.fromisoformat(due_date)
+    except ValueError:
+        return {"ok": False, "error": f"Invalid date '{due_date}'. Use ISO format YYYY-MM-DD."}
+    r = root if root is not None else REPO_ROOT
+    index = r / project_path / "index.md"
+    if not index.exists():
+        return {"ok": False, "error": f"Project not found at '{project_path}'"}
+    text = index.read_text()
+    if "**Deadline:**" not in text:
+        return {"ok": False, "error": f"No Deadline field found in '{project_path}/index.md'"}
+    text = re.sub(r"(?m)^\*\*Deadline:\*\*[ \t]*.*$", f"**Deadline:** {due_date}", text)
+    index.write_text(text)
+    return {"ok": True, "path": project_path, "deadline": due_date}
+
+
+def unset_due(project_path: str, root: Optional[Path] = None) -> dict:
+    """Clear the Deadline field in a project's index.md."""
+    r = root if root is not None else REPO_ROOT
+    index = r / project_path / "index.md"
+    if not index.exists():
+        return {"ok": False, "error": f"Project not found at '{project_path}'"}
+    text = index.read_text()
+    if "**Deadline:**" not in text:
+        return {"ok": False, "error": f"No Deadline field found in '{project_path}/index.md'"}
+    text = re.sub(r"(?m)^\*\*Deadline:\*\*[ \t]*.*$", "**Deadline:**", text)
+    index.write_text(text)
+    return {"ok": True, "path": project_path, "deadline": ""}
+
+
+def list_due(domain: Optional[str] = None, root: Optional[Path] = None) -> list:
+    """Return all projects with a deadline, sorted ascending by date."""
+    projects = list_projects(domain=domain, root=root)
+    with_deadline = [p for p in projects if p.get("deadline")]
+    with_deadline.sort(key=lambda x: x["deadline"])
+    return with_deadline
+
+
+def get_upcoming_deadlines(days: int = 7, domain: Optional[str] = None,
+                           root: Optional[Path] = None) -> list:
+    """Return projects with deadlines within the next `days` days."""
+    today = date.today()
+    results = []
+    for p in list_due(domain=domain, root=root):
+        try:
+            dl = date.fromisoformat(p["deadline"])
+        except ValueError:
+            continue
+        delta = (dl - today).days
+        if 0 <= delta <= days:
+            results.append(p)
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +573,28 @@ def tool_capture_to_inbox(content: str, tags: Optional[list] = None) -> dict:
 def tool_suggest_triage(inbox_file: str) -> dict:
     """Suggest which Project/Area/Resource an inbox item belongs to."""
     return suggest_triage(inbox_file, root=REPO_ROOT)
+@mcp.tool(name="set_due")
+def tool_set_due(project_path: str, due_date: str) -> dict:
+    """Set or update the deadline on a project. due_date: YYYY-MM-DD."""
+    return set_due(project_path, due_date, root=REPO_ROOT)
+
+
+@mcp.tool(name="unset_due")
+def tool_unset_due(project_path: str) -> dict:
+    """Clear the deadline from a project."""
+    return unset_due(project_path, root=REPO_ROOT)
+
+
+@mcp.tool(name="list_due")
+def tool_list_due(domain: str = "") -> list:
+    """List all projects with deadlines, sorted ascending by date."""
+    return list_due(domain=domain or None, root=REPO_ROOT)
+
+
+@mcp.tool(name="get_upcoming_deadlines")
+def tool_get_upcoming_deadlines(days: int = 7, domain: str = "") -> list:
+    """Return projects with deadlines within the next N days (default 7)."""
+    return get_upcoming_deadlines(days=days, domain=domain or None, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
