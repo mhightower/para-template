@@ -1,7 +1,7 @@
 """Unit tests for PARA MCP server — written before implementation (TDD)."""
 import os
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -1426,12 +1426,13 @@ class TestFindItems:
 
 class TestGenerateDigest:
     def _setup_vault(self, tmp_path: Path) -> None:
-        # Active project with near deadline
+        # Active project with near deadline (2 days from now, always within the 3-day window)
+        near_deadline = (date.today() + timedelta(days=2)).isoformat()
         proj_near = tmp_path / "Work" / "Projects" / "2026-09-NearDeadline"
         proj_near.mkdir(parents=True)
         (proj_near / "index.md").write_text(
             "# 2026-09-NearDeadline\n\n"
-            "**Status:** Active\n**Deadline:** 2026-10-05\n"
+            f"**Status:** Active\n**Deadline:** {near_deadline}\n"
             "**Goal:** Ship v1\n**Next Action:** Write release notes\n"
         )
         # Waiting project

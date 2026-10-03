@@ -509,7 +509,7 @@ def generate_digest(period: str = "daily", root: Optional[Path] = None) -> dict:
             try:
                 deadline = date.fromisoformat(deadline_str)
                 delta = (deadline - today).days
-                if delta <= 3:
+                if 0 <= delta <= 3:
                     deadlines.append({
                         "name": p["name"],
                         "deadline": deadline_str,
@@ -568,6 +568,7 @@ def generate_digest(period: str = "daily", root: Optional[Path] = None) -> dict:
         return {"nothing_new": True, "message": "Nothing new to report."}
 
     result = {
+        "ok": True,
         "period": period,
         "deadlines": deadlines,
         "next_actions": next_actions,
