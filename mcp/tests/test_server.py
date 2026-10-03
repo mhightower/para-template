@@ -1559,3 +1559,106 @@ class TestGenerateDigest:
         (tmp_path / "README.md").write_text("top level")
         result = server.generate_digest(period="weekly", root=tmp_path)
         assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# Tags (issue #24)
+# ---------------------------------------------------------------------------
+
+class TestTags:
+    def _make_note(self, tmp_path, domain, bucket, name, content="# Note\n") -> Path:
+        p = tmp_path / domain / bucket
+        p.mkdir(parents=True, exist_ok=True)
+        note = p / f"{name}.md"
+        note.write_text(content)
+        return note
+
+    def test_tag_item_adds_tag_to_file(self, tmp_path):
+        note = self._make_note(tmp_path, "Work", "Resources", "my-note")
+        result = server.tag_item("Work/Resources/my-note.md", "#urgent", root=tmp_path)
+        assert result["ok"] is True
+        assert "#urgent" in note.read_text()
+
+    def test_tag_item_creates_tags_field_if_absent(self, tmp_path):
+        note = self._make_note(tmp_path, "Work", "Resources", "bare")
+        server.tag_item("Work/Resources/bare.md", "#new", root=tmp_path)
+        text = note.read_text()
+        assert "**Tags:**" in text
+
+    def test_tag_item_appends_to_existing_tags(self, tmp_path):
+        note = self._make_note(tmp_path, "Work", "Resources", "existing",
+                               content="# Note\n\n**Tags:** #first\n")
+        server.tag_item("Work/Resources/existing.md", "#second", root=tmp_path)
+        text = note.read_text()
+        assert "#first" in text
+        assert "#second" in text
+
+    def test_tag_item_does_not_duplicate_tag(self, tmp_path):
+        note = self._make_note(tmp_path, "Work", "Resources", "dup",
+                               content="# Note\n\n**Tags:** #urgent\n")
+        result = server.tag_item("Work/Resources/dup.md", "#urgent", root=tmp_path)
+        assert result["ok"] is False
+        assert "already" in result["error"].lower()
+
+    def test_tag_item_file_not_found(self, tmp_path):
+        result = server.tag_item("Work/Resources/missing.md", "#x", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_untag_item_removes_tag(self, tmp_path):
+        note = self._make_note(tmp_path, "Work", "Resources", "tagged",
+                               content="# Note\n\n**Tags:** #urgent #waiting\n")
+        result = server.untag_item("Work/Resources/tagged.md", "#urgent", root=tmp_path)
+        assert result["ok"] is True
+        text = note.read_text()
+        assert "#urgent" not in text
+        assert "#waiting" in text
+
+    def test_untag_item_tag_not_present_returns_error(self, tmp_path):
+        note = self._make_note(tmp_path, "Work", "Resources", "notag",
+                               content="# Note\n\n**Tags:** #waiting\n")
+        result = server.untag_item("Work/Resources/notag.md", "#missing", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_get_tagged_returns_items_with_tag(self, tmp_path):
+        self._make_note(tmp_path, "Work", "Resources", "n1",
+                        content="# N1\n\n**Tags:** #urgent\n")
+        self._make_note(tmp_path, "Personal", "Areas", "n2",
+                        content="# N2\n\n**Tags:** #urgent #other\n")
+        self._make_note(tmp_path, "Work", "Resources", "n3",
+                        content="# N3\n\n**Tags:** #other\n")
+        results = server.get_tagged("#urgent", root=tmp_path)
+        paths = [r["path"] for r in results]
+        assert any("n1" in p for p in paths)
+        assert any("n2" in p for p in paths)
+        assert not any("n3" in p for p in paths)
+
+    def test_list_tags_returns_all_tags_with_counts(self, tmp_path):
+        self._make_note(tmp_path, "Work", "Resources", "a",
+                        content="# A\n\n**Tags:** #urgent\n")
+        self._make_note(tmp_path, "Work", "Areas", "b",
+                        content="# B\n\n**Tags:** #urgent #focus\n")
+        tags = server.list_tags(root=tmp_path)
+        tag_map = {t["tag"]: t["count"] for t in tags}
+        assert tag_map.get("#urgent") == 2
+        assert tag_map.get("#focus") == 1
+
+    def test_list_tags_empty_when_no_tags(self, tmp_path):
+        self._make_note(tmp_path, "Work", "Resources", "plain", content="# No tags\n")
+        tags = server.list_tags(root=tmp_path)
+        assert tags == []
+
+    def test_get_tagged_inline_tags_detected(self, tmp_path):
+        self._make_note(tmp_path, "Work", "Areas", "inline",
+                        content="# Note\n\nThis is #transcribed content.\n")
+        results = server.get_tagged("#transcribed", root=tmp_path)
+        assert len(results) > 0
+
+    def test_tag_item_rejects_invalid_tag_format(self, tmp_path):
+        note = self._make_note(tmp_path, "Work", "Resources", "bad")
+        result = server.tag_item("Work/Resources/bad.md", "urgent", root=tmp_path)
+        assert result["ok"] is False
+        assert "invalid tag" in result["error"].lower()
+
+    def test_untag_item_file_not_found(self, tmp_path):
+        result = server.untag_item("Work/Resources/ghost.md", "#x", root=tmp_path)
+        assert result["ok"] is False
