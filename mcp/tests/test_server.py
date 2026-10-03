@@ -824,3 +824,85 @@ class TestMCPResourceToolWrappers:
         )
         result = server.list_resources(with_links=True, root=tmp_path)
         assert result[0]["links"] == [{"label": "Guide", "url": "https://guide.com"}]
+
+
+# ---------------------------------------------------------------------------
+# get_wip (issue #23)
+# ---------------------------------------------------------------------------
+
+class TestGetWip:
+    def test_returns_projects_sorted_most_recently_modified(self, tmp_path):
+        p1 = make_project(tmp_path, "Work", "2026-09-Old")
+        p2 = make_project(tmp_path, "Work", "2026-09-New")
+        age_file(p1 / "index.md", 10)
+        age_file(p2 / "index.md", 2)
+        results = server.get_wip(root=tmp_path)
+        names = [r["name"] for r in results]
+        assert names.index("2026-09-New") < names.index("2026-09-Old")
+
+    def test_includes_last_modified_timestamp(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A")
+        results = server.get_wip(root=tmp_path)
+        assert "last_modified" in results[0]
+
+    def test_includes_status_field(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A", status="On Hold")
+        results = server.get_wip(root=tmp_path)
+        assert results[0]["status"] == "On Hold"
+
+    def test_flags_stale_projects_over_30_days(self, tmp_path):
+        p = make_project(tmp_path, "Work", "2026-09-Stale")
+        age_file(p / "index.md", 31)
+        results = server.get_wip(root=tmp_path)
+        assert results[0]["stale"] is True
+
+    def test_non_stale_project_not_flagged(self, tmp_path):
+        p = make_project(tmp_path, "Work", "2026-09-Fresh")
+        age_file(p / "index.md", 5)
+        results = server.get_wip(root=tmp_path)
+        assert results[0]["stale"] is False
+
+    def test_scope_areas_bucket(self, tmp_path):
+        # Areas bucket
+        areas_dir = tmp_path / "Work" / "Areas"
+        areas_dir.mkdir(parents=True)
+        (areas_dir / "health.md").write_text("# Health\n")
+        results = server.get_wip(bucket="Areas", root=tmp_path)
+        assert any(r["name"] == "health" for r in results)
+
+    def test_scope_resources_bucket(self, tmp_path):
+        res_dir = tmp_path / "Work" / "Resources"
+        res_dir.mkdir(parents=True)
+        (res_dir / "reading-list.md").write_text("# Reading List\n")
+        results = server.get_wip(bucket="Resources", root=tmp_path)
+        assert any(r["name"] == "reading-list" for r in results)
+
+    def test_filter_by_domain(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-W")
+        make_project(tmp_path, "Personal", "2026-09-P")
+        results = server.get_wip(domain="Work", root=tmp_path)
+        names = [r["name"] for r in results]
+        assert "2026-09-W" in names
+        assert "2026-09-P" not in names
+
+    def test_empty_when_no_projects(self, tmp_path):
+        assert server.get_wip(root=tmp_path) == []
+
+    def test_skips_non_directory_in_projects_bucket(self, tmp_path):
+        proj_dir = tmp_path / "Work" / "Projects"
+        proj_dir.mkdir(parents=True)
+        (proj_dir / "loose-file.md").write_text("# stray")
+        results = server.get_wip(root=tmp_path)
+        assert results == []
+
+    def test_skips_project_dir_without_index(self, tmp_path):
+        proj_dir = tmp_path / "Work" / "Projects" / "2026-09-NoIndex"
+        proj_dir.mkdir(parents=True)
+        results = server.get_wip(root=tmp_path)
+        assert results == []
+
+    def test_skips_domain_without_requested_bucket(self, tmp_path):
+        (tmp_path / "Work" / "Areas").mkdir(parents=True)
+        # Work has no Projects bucket, should be skipped
+        results = server.get_wip(bucket="Projects", root=tmp_path)
+        assert results == []
