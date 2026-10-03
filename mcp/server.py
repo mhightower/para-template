@@ -862,6 +862,71 @@ def get_upcoming_deadlines(days: int = 7, domain: Optional[str] = None,
 
 
 # ---------------------------------------------------------------------------
+# Audio capture + transcription (issue #22)
+# ---------------------------------------------------------------------------
+
+AUDIO_EXTENSIONS = {".m4a", ".mp3", ".wav", ".ogg", ".flac", ".webm", ".mp4"}
+
+
+def _default_transcriber(audio_bytes: bytes) -> str:
+    """Placeholder transcriber — raises unless OPENAI_API_KEY is configured."""
+    import os
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "No transcription service configured. Set OPENAI_API_KEY to enable Whisper transcription."
+        )
+    # Real implementation would call OpenAI Whisper API here
+    raise NotImplementedError("Transcription requires OPENAI_API_KEY")
+
+
+def capture_audio(audio_path: str, domain: str,
+                  transcriber=None,
+                  root: Optional[Path] = None) -> dict:
+    """Transcribe an audio file and file it as a note in <domain>/Areas/."""
+    r = root if root is not None else REPO_ROOT
+    audio = Path(audio_path)
+    if not audio.exists():
+        return {"ok": False, "error": f"Audio file not found: '{audio_path}'"}
+
+    fn = transcriber if transcriber is not None else _default_transcriber
+    stem = _sanitize_name(audio.stem)
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    note_title = f"voice-{stem}-{timestamp}"
+
+    try:
+        text = fn(audio.read_bytes())
+    except Exception as exc:
+        raw_dir = r / domain / "Areas"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        raw_note_title = f"voice-raw-{stem}-{timestamp}"
+        raw_path = raw_dir / f"{raw_note_title}.md"
+        raw_path.write_text(
+            f"# {raw_note_title}\n\n"
+            f"**Transcription failed:** {exc}\n\n"
+            f"**Original audio:** {audio_path}\n\n"
+            f"Retry transcription manually or attach the file again.\n"
+        )
+        return {
+            "ok": False,
+            "error": str(exc),
+            "raw_stored": True,
+            "raw_path": str(raw_path.relative_to(r)),
+        }
+
+    note_dir = r / domain / "Areas"
+    note_dir.mkdir(parents=True, exist_ok=True)
+    note_path = note_dir / f"{note_title}.md"
+    note_path.write_text(
+        f"# {note_title}\n\n"
+        f"#transcribed\n\n"
+        f"{text}\n\n"
+        f"**Original audio:** {audio_path}\n"
+    )
+    return {"ok": True, "path": str(note_path.relative_to(r))}
+
+
+# ---------------------------------------------------------------------------
 # MCP tool registration (thin wrappers — no root param exposed to MCP clients)
 # ---------------------------------------------------------------------------
 
@@ -980,6 +1045,12 @@ def tool_find_items(query: str) -> dict:
 def tool_generate_digest(period: str = "daily") -> dict:
     """Generate a daily or weekly PARA digest. Trigger on demand with /digest."""
     return generate_digest(period=period, root=REPO_ROOT)
+
+
+@mcp.tool(name="capture_audio")
+def tool_capture_audio(audio_path: str, domain: str) -> dict:
+    """Transcribe an audio file and save it as a tagged note. Requires OPENAI_API_KEY."""
+    return capture_audio(audio_path, domain, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
