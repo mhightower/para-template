@@ -456,7 +456,10 @@ def set_due(project_path: str, due_date: str, root: Optional[Path] = None) -> di
     index = r / project_path / "index.md"
     if not index.exists():
         return {"ok": False, "error": f"Project not found at '{project_path}'"}
-    text = re.sub(r"\*\*Deadline:\*\*\s*.*", f"**Deadline:** {due_date}", index.read_text())
+    text = index.read_text()
+    if "**Deadline:**" not in text:
+        return {"ok": False, "error": f"No Deadline field found in '{project_path}/index.md'"}
+    text = re.sub(r"(?m)^\*\*Deadline:\*\*[ \t]*.*$", f"**Deadline:** {due_date}", text)
     index.write_text(text)
     return {"ok": True, "path": project_path, "deadline": due_date}
 
@@ -467,7 +470,10 @@ def unset_due(project_path: str, root: Optional[Path] = None) -> dict:
     index = r / project_path / "index.md"
     if not index.exists():
         return {"ok": False, "error": f"Project not found at '{project_path}'"}
-    text = re.sub(r"\*\*Deadline:\*\*\s*.*", "**Deadline:**", index.read_text())
+    text = index.read_text()
+    if "**Deadline:**" not in text:
+        return {"ok": False, "error": f"No Deadline field found in '{project_path}/index.md'"}
+    text = re.sub(r"(?m)^\*\*Deadline:\*\*[ \t]*.*$", "**Deadline:**", text)
     index.write_text(text)
     return {"ok": True, "path": project_path, "deadline": ""}
 

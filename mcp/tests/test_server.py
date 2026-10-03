@@ -27,6 +27,18 @@ def make_project(root: Path, domain: str, name: str, deadline: str = "2026-12-31
     return proj
 
 
+def make_project_without_deadline(root: Path, domain: str, name: str, status: str = "Active") -> Path:
+    proj = root / domain / "Projects" / name
+    proj.mkdir(parents=True)
+    (proj / "index.md").write_text(
+        f"# {name}\n\n"
+        f"**Status:** {status}\n"
+        f"**Goal:** TBD\n"
+        f"**Next Action:** TBD\n"
+    )
+    return proj
+
+
 def age_file(path: Path, days: int) -> None:
     t = time.time() - days * 86400
     os.utime(path, (t, t))
@@ -993,8 +1005,24 @@ class TestDueDates:
         text = (tmp_path / "Work" / "Projects" / "2026-09-A" / "index.md").read_text()
         assert "**Deadline:**" in text
         assert "**Goal:** TBD" in text
+        assert "**Next Action:** TBD" in text
+        assert "**Status:** Active" in text
         parsed = server._parse_index(tmp_path / "Work" / "Projects" / "2026-09-A" / "index.md")
         assert parsed["deadline"] == ""
+
+    def test_set_due_and_unset_due_keep_adjacent_frontmatter_intact(self, tmp_path):
+        path = make_project(tmp_path, "Work", "2026-09-A", deadline="2027-01-15") / "index.md"
+        original = path.read_text()
+        set_result = server.set_due("Work/Projects/2026-09-A", "2027-02-01", root=tmp_path)
+        unset_result = server.unset_due("Work/Projects/2026-09-A", root=tmp_path)
+        assert set_result["ok"] is True
+        assert unset_result["ok"] is True
+        text = path.read_text()
+        assert "**Status:** Active" in text
+        assert "**Goal:** TBD" in text
+        assert "**Next Action:** TBD" in text
+        assert text.count("**Deadline:**") == 1
+        assert text != original
 
     def test_unset_due_project_not_found(self, tmp_path):
         result = server.unset_due("Work/Projects/ghost", root=tmp_path)
@@ -1030,7 +1058,19 @@ class TestDueDates:
 
     def test_get_upcoming_deadlines_skips_invalid_deadline_formats(self, tmp_path):
         # Projects with empty or malformed deadlines should be skipped gracefully
-        p = make_project(tmp_path, "Work", "2026-09-Bad", deadline="not-a-date")
+        make_project(tmp_path, "Work", "2026-09-Bad", deadline="not-a-date")
         results = server.get_upcoming_deadlines(days=365, root=tmp_path)
         names = [r["name"] for r in results]
         assert "2026-09-Bad" not in names
+
+    def test_set_due_rejects_project_without_deadline_field(self, tmp_path):
+        make_project_without_deadline(tmp_path, "Work", "2026-09-NoDeadline")
+        result = server.set_due("Work/Projects/2026-09-NoDeadline", "2027-01-01", root=tmp_path)
+        assert result["ok"] is False
+        assert "No Deadline field" in result["error"]
+
+    def test_unset_due_rejects_project_without_deadline_field(self, tmp_path):
+        make_project_without_deadline(tmp_path, "Work", "2026-09-NoDeadline")
+        result = server.unset_due("Work/Projects/2026-09-NoDeadline", root=tmp_path)
+        assert result["ok"] is False
+        assert "No Deadline field" in result["error"]
