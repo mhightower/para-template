@@ -331,6 +331,112 @@ def list_resources(domain: Optional[str] = None, with_links: bool = False,
 
 
 # ---------------------------------------------------------------------------
+# Cross-reference search (issue #27)
+# ---------------------------------------------------------------------------
+
+SEARCH_BUCKETS = {"Resources", "Archives"}
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "for", "in", "on", "at", "to", "of",
+    "with", "is", "are", "was", "were", "be", "been", "this", "that", "it",
+    "as", "by", "from", "not", "but", "so", "if", "i", "my", "we", "our",
+}
+
+
+def _iter_knowledge_files(scope: list, root: Path):
+    """Yield (file_path, bucket, domain) for all .md files in the given bucket scopes."""
+    bucket_map = {s.lower(): s.capitalize() for s in ("resources", "archives")}
+    target_buckets = {bucket_map.get(s.lower(), s.capitalize()) for s in scope}
+    for d in root.iterdir():
+        if not d.is_dir() or d.name.startswith((".", "_")):
+            continue
+        for bucket_name in target_buckets:
+            bucket_dir = d / bucket_name
+            if not bucket_dir.exists():
+                continue
+            for f in bucket_dir.rglob("*.md"):
+                yield f, bucket_name, d.name
+
+
+def _extract_excerpt(text: str, query: str, max_len: int = 120) -> str:
+    """Return a short excerpt around the first occurrence of query in text."""
+    lower = text.lower()
+    idx = lower.find(query.lower())
+    if idx == -1:
+        return text[:max_len].replace("\n", " ").strip()
+    start = max(0, idx - 40)
+    end = min(len(text), idx + len(query) + 80)
+    excerpt = text[start:end].replace("\n", " ").strip()
+    return f"…{excerpt}…" if start > 0 else excerpt
+
+
+def search_knowledge(query: str, scope: Optional[list] = None,
+                     sort_by: str = "relevance",
+                     root: Optional[Path] = None) -> list:
+    """Search Resources and/or Archives for query; returns results with excerpts."""
+    if scope is None:
+        scope = ["resources", "archives"]
+    r = root if root is not None else REPO_ROOT
+    results = []
+    for f, bucket, domain in _iter_knowledge_files(scope, r):
+        text = f.read_text()
+        count = text.lower().count(query.lower())
+        if count == 0:
+            continue
+        mtime = datetime.fromtimestamp(f.stat().st_mtime).isoformat(timespec="seconds")
+        results.append({
+            "path": str(f.relative_to(r)),
+            "bucket": bucket,
+            "domain": domain,
+            "name": f.stem,
+            "excerpt": _extract_excerpt(text, query),
+            "relevance": count,
+            "last_modified": mtime,
+        })
+    if sort_by == "modified":
+        results.sort(key=lambda x: x["last_modified"], reverse=True)
+    else:
+        results.sort(key=lambda x: -x["relevance"])
+    return results
+
+
+def _word_set(text: str) -> set:
+    """Extract significant lowercase words from text, excluding stopwords."""
+    words = re.findall(r"[a-z]{3,}", text.lower())
+    return {w for w in words if w not in _STOPWORDS}
+
+
+def find_similar(item_path: str, scope: Optional[list] = None,
+                 root: Optional[Path] = None) -> list:
+    """Return items from Resources/Archives semantically similar to item_path."""
+    if scope is None:
+        scope = ["resources", "archives"]
+    r = root if root is not None else REPO_ROOT
+    src = r / item_path
+    if not src.exists():
+        return {"ok": False, "error": f"Item not found: '{item_path}'"}
+    src_words = _word_set(src.read_text())
+    if not src_words:
+        return []
+    results = []
+    for f, bucket, domain in _iter_knowledge_files(scope, r):
+        if f == src:
+            continue
+        other_words = _word_set(f.read_text())
+        overlap = len(src_words & other_words)
+        if overlap == 0:
+            continue
+        results.append({
+            "path": str(f.relative_to(r)),
+            "bucket": bucket,
+            "domain": domain,
+            "name": f.stem,
+            "similarity_score": overlap,
+        })
+    results.sort(key=lambda x: -x["similarity_score"])
+    return results
+
+
+# ---------------------------------------------------------------------------
 # MCP tool registration (thin wrappers — no root param exposed to MCP clients)
 # ---------------------------------------------------------------------------
 
@@ -389,6 +495,21 @@ def tool_list_resources(domain: str = "", with_links: bool = False) -> list:
 def tool_add_file_to_project(project_path: str, title: str, content: str) -> dict:
     """Add a file to an existing project and update the index.md file list."""
     return add_file_to_project(project_path, title, content, root=REPO_ROOT)
+
+
+@mcp.tool(name="search_knowledge")
+def tool_search_knowledge(query: str, scope: str = "resources,archives",
+                           sort_by: str = "relevance") -> list:
+    """Search Resources and/or Archives. scope: comma-separated (resources,archives)."""
+    scope_list = [s.strip() for s in scope.split(",") if s.strip()]
+    return search_knowledge(query, scope=scope_list, sort_by=sort_by, root=REPO_ROOT)
+
+
+@mcp.tool(name="find_similar")
+def tool_find_similar(item_path: str, scope: str = "resources,archives") -> list:
+    """Find items in Resources/Archives semantically similar to the given item."""
+    scope_list = [s.strip() for s in scope.split(",") if s.strip()]
+    return find_similar(item_path, scope=scope_list, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
