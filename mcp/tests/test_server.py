@@ -992,6 +992,7 @@ class TestDueDates:
         assert result["ok"] is True
         text = (tmp_path / "Work" / "Projects" / "2026-09-A" / "index.md").read_text()
         assert "**Deadline:**" in text
+        assert "**Goal:** TBD" in text
         parsed = server._parse_index(tmp_path / "Work" / "Projects" / "2026-09-A" / "index.md")
         assert parsed["deadline"] == ""
 
