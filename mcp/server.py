@@ -565,8 +565,9 @@ def generate_digest(period: str = "daily", root: Optional[Path] = None) -> dict:
                     })
 
     if not deadlines and not next_actions and not waiting and not area_flags and not recent_items:
-        return {"nothing_new": True, "message": "Nothing new to report."}
+        return {"ok": True, "nothing_new": True, "message": "Nothing new to report."}
 
+    # TODO: "items moved" (inbox→project) and "projects updated" tracking are not yet implemented
     result = {
         "ok": True,
         "period": period,
