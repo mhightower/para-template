@@ -1074,3 +1074,183 @@ class TestDueDates:
         result = server.unset_due("Work/Projects/2026-09-NoDeadline", root=tmp_path)
         assert result["ok"] is False
         assert "No Deadline field" in result["error"]
+
+# ---------------------------------------------------------------------------
+# list_links / lint_links (issue #20: Linked references between items)
+# ---------------------------------------------------------------------------
+
+class TestListLinks:
+    def _setup_vault(self, tmp_path: Path) -> None:
+        # Project that references Resources and Areas via [[...]]
+        proj = tmp_path / "Work" / "Projects" / "Alpha"
+        proj.mkdir(parents=True)
+        (proj / "index.md").write_text(
+            "# Alpha\n\n**Status:** Active\n**Deadline:** 2026-12-31\n"
+            "**Goal:** Ship\n**Next Action:** Review\n\n"
+            "See also [[Interview-Prep]] and [[Health]].\n"
+        )
+
+        # Resource referenced by the project
+        (tmp_path / "Work" / "Resources").mkdir(parents=True)
+        (tmp_path / "Work" / "Resources" / "Interview-Prep.md").write_text(
+            "# Interview Prep\nNotes on interviewing.\nRelated: [[Alpha]]\n"
+        )
+
+        # Area referenced by the project
+        (tmp_path / "Personal" / "Areas").mkdir(parents=True)
+        (tmp_path / "Personal" / "Areas" / "Health.md").write_text(
+            "# Health\nStay healthy.\n"
+        )
+
+    def test_list_links_returns_dict(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.list_links("Alpha", root=tmp_path)
+        assert isinstance(result, dict)
+
+    def test_forward_links_extracted(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.list_links("Alpha", root=tmp_path)
+        assert "forward_links" in result
+        names = [l["name"] for l in result["forward_links"]]
+        assert "Interview-Prep" in names
+        assert "Health" in names
+
+    def test_forward_links_resolve_to_path(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.list_links("Alpha", root=tmp_path)
+        resolved = [l for l in result["forward_links"] if l["name"] == "Interview-Prep"]
+        assert len(resolved) == 1
+        assert resolved[0]["path"] is not None
+        assert "Interview-Prep" in resolved[0]["path"]
+
+    def test_backlinks_found(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.list_links("Alpha", root=tmp_path)
+        assert "backlinks" in result
+        back_paths = [b["path"] for b in result["backlinks"]]
+        assert any("Interview-Prep" in p for p in back_paths)
+
+    def test_item_not_found_returns_error(self, tmp_path):
+        result = server.list_links("NoSuchItem", root=tmp_path)
+        assert result.get("ok") is False
+
+    def test_broken_link_shows_none_path(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.list_links("Alpha", root=tmp_path)
+        # "Health" exists; verify all forward links have a path or None
+        for link in result["forward_links"]:
+            assert "path" in link
+            assert "name" in link
+
+    def test_tool_wrapper_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        self._setup_vault(tmp_path)
+        result = server.tool_list_links("Alpha")
+        assert "forward_links" in result
+
+    def test_backlinks_search_all_buckets(self, tmp_path):
+        # Place a reference in Archives
+        arch = tmp_path / "Work" / "Archives" / "2025-Old"
+        arch.mkdir(parents=True)
+        (arch / "index.md").write_text(
+            "# Old\n**Status:** Complete\n**Deadline:** 2025-01-01\n"
+            "**Goal:** Done\n**Next Action:** None\n\nSee [[Alpha]].\n"
+        )
+        self._setup_vault(tmp_path)
+        result = server.list_links("Alpha", root=tmp_path)
+        back_paths = [b["path"] for b in result["backlinks"]]
+        assert any("2025-Old" in p for p in back_paths)
+
+
+class TestLintLinks:
+    def test_returns_list(self, tmp_path):
+        (tmp_path / "Work" / "Projects" / "2026-09-A").mkdir(parents=True)
+        (tmp_path / "Work" / "Projects" / "2026-09-A" / "index.md").write_text(
+            "# A\n\n**Status:** Active\n**Deadline:** 2026-12-31\n"
+            "**Goal:** TBD\n**Next Action:** TBD\n\n[[BrokenRef]]\n"
+        )
+        result = server.lint_links(root=tmp_path)
+        assert isinstance(result, list)
+
+    def test_reports_broken_links(self, tmp_path):
+        (tmp_path / "Work" / "Projects" / "2026-09-A").mkdir(parents=True)
+        (tmp_path / "Work" / "Projects" / "2026-09-A" / "index.md").write_text(
+            "# A\n\n**Status:** Active\n**Deadline:** 2026-12-31\n"
+            "**Goal:** TBD\n**Next Action:** TBD\n\n[[BrokenRef]]\n"
+        )
+        result = server.lint_links(root=tmp_path)
+        assert len(result) > 0
+        assert result[0]["link_name"] == "BrokenRef"
+        assert "source_path" in result[0]
+
+    def test_no_broken_links_returns_empty(self, tmp_path):
+        proj = tmp_path / "Work" / "Projects" / "2026-09-A"
+        proj.mkdir(parents=True)
+        (proj / "index.md").write_text(
+            "# A\n\n**Status:** Active\n**Deadline:** 2026-12-31\n"
+            "**Goal:** TBD\n**Next Action:** TBD\n\n[[2026-09-A]]\n"
+        )
+        result = server.lint_links(root=tmp_path)
+        assert result == []
+
+    def test_valid_links_not_reported(self, tmp_path):
+        proj = tmp_path / "Work" / "Projects" / "2026-09-A"
+        proj.mkdir(parents=True)
+        (proj / "index.md").write_text("# A\n\n**Status:** Active\n**Deadline:** 2026-12-31\n"
+            "**Goal:** TBD\n**Next Action:** TBD\n\n[[GoodRef]] and [[BadRef]]\n")
+        (tmp_path / "Work" / "Resources").mkdir(parents=True)
+        (tmp_path / "Work" / "Resources" / "GoodRef.md").write_text("# GoodRef\n")
+        result = server.lint_links(root=tmp_path)
+        names = [r["link_name"] for r in result]
+        assert "BadRef" in names
+        assert "GoodRef" not in names
+
+    def test_tool_wrapper_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        result = server.tool_lint_links()
+        assert isinstance(result, list)
+
+    def test_lint_links_with_root_file_skipped(self, tmp_path):
+        (tmp_path / "Work" / "Projects" / "Alpha").mkdir(parents=True)
+        (tmp_path / "Work" / "Projects" / "Alpha" / "index.md").write_text(
+            "# Alpha\n\n**Status:** Active\n**Deadline:** 2026-12-31\n"
+            "**Goal:** TBD\n**Next Action:** TBD\n\n[[Missing]]\n"
+        )
+        (tmp_path / "README.md").write_text("top level")
+        result = server.lint_links(root=tmp_path)
+        assert isinstance(result, list)
+
+
+class TestListLinksExtra:
+    def _setup_vault(self, tmp_path: Path) -> None:
+        proj = tmp_path / "Work" / "Projects" / "Alpha"
+        proj.mkdir(parents=True)
+        (proj / "index.md").write_text(
+            "# Alpha\n\n**Status:** Active\n**Deadline:** 2026-12-31\n"
+            "**Goal:** Ship\n**Next Action:** Review\n\n"
+            "See also [[Interview-Prep]] and [[Health]].\n"
+        )
+        (tmp_path / "Work" / "Resources").mkdir(parents=True)
+        (tmp_path / "Work" / "Resources" / "Interview-Prep.md").write_text(
+            "# Interview Prep\nNotes.\nRelated: [[Alpha]]\n"
+        )
+        (tmp_path / "Personal" / "Areas").mkdir(parents=True)
+        (tmp_path / "Personal" / "Areas" / "Health.md").write_text("# Health\nStay healthy.\n")
+
+    def test_list_links_for_file_item(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.list_links("Health", root=tmp_path)
+        assert "forward_links" in result
+        assert result["item"] == "Health"
+
+    def test_list_links_with_root_file_skipped(self, tmp_path):
+        self._setup_vault(tmp_path)
+        (tmp_path / "README.md").write_text("top level")
+        result = server.list_links("Alpha", root=tmp_path)
+        assert "forward_links" in result
+
+    def test_find_item_path_bucket_not_exist(self, tmp_path):
+        (tmp_path / "Work" / "Resources").mkdir(parents=True)
+        (tmp_path / "Work" / "Resources" / "MyNote.md").write_text("# Note\n")
+        result = server.list_links("MyNote", root=tmp_path)
+        assert "forward_links" in result
