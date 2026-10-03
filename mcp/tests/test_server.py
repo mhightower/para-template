@@ -1,7 +1,7 @@
 """Unit tests for PARA MCP server — written before implementation (TDD)."""
 import os
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -1418,3 +1418,144 @@ class TestFindItems:
         result = server.find_items("Johnson", root=tmp_path)
         assert isinstance(result, dict)
         assert len(result["results"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# generate_digest (issue #19: Daily and weekly digest)
+# ---------------------------------------------------------------------------
+
+class TestGenerateDigest:
+    def _setup_vault(self, tmp_path: Path) -> None:
+        # Active project with near deadline (2 days from now, always within the 3-day window)
+        near_deadline = (date.today() + timedelta(days=2)).isoformat()
+        proj_near = tmp_path / "Work" / "Projects" / "2026-09-NearDeadline"
+        proj_near.mkdir(parents=True)
+        (proj_near / "index.md").write_text(
+            "# 2026-09-NearDeadline\n\n"
+            f"**Status:** Active\n**Deadline:** {near_deadline}\n"
+            "**Goal:** Ship v1\n**Next Action:** Write release notes\n"
+        )
+        # Waiting project
+        proj_wait = tmp_path / "Work" / "Projects" / "2026-09-Waiting"
+        proj_wait.mkdir(parents=True)
+        (proj_wait / "index.md").write_text(
+            "# 2026-09-Waiting\n\n"
+            "**Status:** Waiting\n**Deadline:** 2026-12-31\n"
+            "**Goal:** Review\n**Next Action:** Follow up with client\n"
+        )
+        # Area with TODO
+        (tmp_path / "Personal" / "Areas").mkdir(parents=True)
+        (tmp_path / "Personal" / "Areas" / "Health.md").write_text(
+            "# Health\nTODO: schedule checkup\n"
+        )
+        # Recent resource (modified within last day)
+        (tmp_path / "Work" / "Resources").mkdir(parents=True)
+        res_file = tmp_path / "Work" / "Resources" / "NewNote.md"
+        res_file.write_text("# NewNote\nRecently added resource.\n")
+
+    def test_returns_dict(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.generate_digest(root=tmp_path)
+        assert isinstance(result, dict)
+
+    def test_daily_digest_has_expected_sections(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.generate_digest(period="daily", root=tmp_path)
+        assert "deadlines" in result
+        assert "next_actions" in result
+        assert "waiting" in result
+
+    def test_weekly_digest_includes_stale_alerts(self, tmp_path):
+        self._setup_vault(tmp_path)
+        proj = make_project(tmp_path, "Work", "2026-09-Stale")
+        age_file(proj / "index.md", 35)
+        result = server.generate_digest(period="weekly", root=tmp_path)
+        assert "stale_alerts" in result
+        stale_names = [p["name"] for p in result["stale_alerts"]]
+        assert "2026-09-Stale" in stale_names
+
+    def test_deadline_within_3_days_included(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.generate_digest(period="daily", root=tmp_path)
+        deadline_paths = [d["name"] for d in result["deadlines"]]
+        assert "2026-09-NearDeadline" in deadline_paths
+
+    def test_waiting_projects_listed(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.generate_digest(period="daily", root=tmp_path)
+        waiting_names = [p["name"] for p in result["waiting"]]
+        assert "2026-09-Waiting" in waiting_names
+
+    def test_next_actions_listed_for_active_projects(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.generate_digest(period="daily", root=tmp_path)
+        actions = {p["name"]: p.get("next_action") for p in result["next_actions"]}
+        assert "2026-09-NearDeadline" in actions
+        assert "Write release notes" in actions["2026-09-NearDeadline"]
+
+    def test_area_flags_include_todo_items(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.generate_digest(period="daily", root=tmp_path)
+        assert "area_flags" in result
+        assert any("Health" in f["name"] for f in result["area_flags"])
+
+    def test_empty_vault_returns_nothing_new(self, tmp_path):
+        result = server.generate_digest(root=tmp_path)
+        assert result.get("nothing_new") is True
+        assert "message" in result
+
+    def test_items_per_section_have_one_line_format(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.generate_digest(period="daily", root=tmp_path)
+        for action in result["next_actions"]:
+            assert "name" in action
+            assert "next_action" in action
+            # Concise: name + next_action are short strings
+            assert isinstance(action["name"], str)
+            assert isinstance(action["next_action"], str)
+
+    def test_period_defaults_to_daily(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result_default = server.generate_digest(root=tmp_path)
+        result_daily = server.generate_digest(period="daily", root=tmp_path)
+        assert "deadlines" in result_default
+        assert result_default.get("nothing_new") == result_daily.get("nothing_new")
+
+    def test_invalid_period_returns_error(self, tmp_path):
+        result = server.generate_digest(period="monthly", root=tmp_path)
+        assert result.get("ok") is False
+        assert "period" in result["error"].lower()
+
+    def test_recently_captured_items_in_weekly(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.generate_digest(period="weekly", root=tmp_path)
+        assert "recent_items" in result
+
+    def test_tool_wrapper_delegates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        result = server.tool_generate_digest()
+        assert isinstance(result, dict)
+
+    def test_tool_wrapper_accepts_period(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
+        result = server.tool_generate_digest(period="weekly")
+        assert isinstance(result, dict)
+
+    def test_invalid_deadline_date_is_ignored(self, tmp_path):
+        proj = tmp_path / "Work" / "Projects" / "2026-09-Bad"
+        proj.mkdir(parents=True)
+        (proj / "index.md").write_text(
+            "# 2026-09-Bad\n\n**Status:** Active\n**Deadline:** not-a-date\n"
+            "**Goal:** TBD\n**Next Action:** TBD\n"
+        )
+        result = server.generate_digest(root=tmp_path)
+        # Should not crash; project appears in next_actions but not deadlines
+        assert "deadlines" not in result or not any(
+            d["name"] == "2026-09-Bad" for d in result.get("deadlines", [])
+        )
+
+    def test_skips_root_files_in_area_and_recent_loops(self, tmp_path):
+        self._setup_vault(tmp_path)
+        (tmp_path / "README.md").write_text("top level")
+        result = server.generate_digest(period="weekly", root=tmp_path)
+        assert isinstance(result, dict)
