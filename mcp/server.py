@@ -584,6 +584,61 @@ def generate_digest(period: str = "daily", root: Optional[Path] = None) -> dict:
     return result
 
 
+def staleness_nudge(threshold_days: int = 30, root: Optional[Path] = None) -> list:
+    """Return projects whose last modification exceeds threshold_days.
+
+    Respects a per-project **Staleness Threshold:** N field in index.md.
+    """
+    r = root if root is not None else REPO_ROOT
+    results = []
+    for proj in list_projects(root=r):
+        index_path = r / proj["path"] / "index.md"
+        text = index_path.read_text() if index_path.exists() else ""
+        m = re.search(r"\*\*Staleness Threshold:\*\*\s*(\d+)", text)
+        effective_threshold = int(m.group(1)) if m else threshold_days
+        if proj["days_since_modified"] >= effective_threshold:
+            results.append(proj)
+    return results
+
+
+VALID_NUDGE_ACTIONS = {"archive", "continue", "convert-to-area"}
+
+
+def respond_to_staleness_nudge(path: str, action: str,
+                                root: Optional[Path] = None) -> dict:
+    """Handle a user response to a staleness nudge: archive, continue, or convert-to-area."""
+    if action not in VALID_NUDGE_ACTIONS:
+        return {
+            "ok": False,
+            "error": f"Invalid action '{action}'. Must be one of: {', '.join(sorted(VALID_NUDGE_ACTIONS))}",
+        }
+    r = root if root is not None else REPO_ROOT
+    src = r / path
+    if not src.exists():
+        return {"ok": False, "error": f"Path '{path}' not found"}
+
+    if action == "archive":
+        return archive_project(path, root=r)
+
+    if action == "continue":
+        index = src / "index.md"
+        index.touch()
+        return {"ok": True, "path": path, "action": "continue"}
+
+    # convert-to-area
+    parts = Path(path).parts
+    if len(parts) < 3 or parts[1] != "Projects":
+        return {"ok": False, "error": "Path must be under <domain>/Projects/<name>"}
+    domain, name = parts[0], parts[2]
+    dest_dir = r / domain / "Areas"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / name
+    if dest.exists():
+        return {"ok": False, "error": f"'{name}' already exists in {domain}/Areas"}
+    shutil.move(str(src), str(dest))
+    return {"ok": True, "path": f"{domain}/Areas/{name}", "action": "convert-to-area"}
+
+
 def list_resources(domain: Optional[str] = None, with_links: bool = False,
                    root: Optional[Path] = None) -> list:
     """List all resources across domains (or one domain), optionally including their links."""
@@ -980,6 +1035,18 @@ def tool_find_items(query: str) -> dict:
 def tool_generate_digest(period: str = "daily") -> dict:
     """Generate a daily or weekly PARA digest. Trigger on demand with /digest."""
     return generate_digest(period=period, root=REPO_ROOT)
+
+
+@mcp.tool(name="staleness_nudge")
+def tool_staleness_nudge(threshold_days: int = 30) -> list:
+    """List projects with no activity beyond threshold_days (default 30). Respects per-project overrides."""
+    return staleness_nudge(threshold_days=threshold_days, root=REPO_ROOT)
+
+
+@mcp.tool(name="respond_to_staleness_nudge")
+def tool_respond_to_staleness_nudge(path: str, action: str) -> dict:
+    """Respond to a staleness nudge: archive, continue, or convert-to-area."""
+    return respond_to_staleness_nudge(path, action, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
