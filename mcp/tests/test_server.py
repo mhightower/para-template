@@ -966,3 +966,70 @@ class TestSuggestTriage:
         result = server.tool_suggest_triage(path)
         assert isinstance(result, dict)
         assert "suggestions" in result
+# Due-dates (issue #26)
+# ---------------------------------------------------------------------------
+
+class TestDueDates:
+    def test_set_due_updates_deadline_in_frontmatter(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A", deadline="2026-12-31")
+        result = server.set_due("Work/Projects/2026-09-A", "2027-03-01", root=tmp_path)
+        assert result["ok"] is True
+        text = (tmp_path / "Work" / "Projects" / "2026-09-A" / "index.md").read_text()
+        assert "**Deadline:** 2027-03-01" in text
+
+    def test_set_due_rejects_invalid_date(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A")
+        result = server.set_due("Work/Projects/2026-09-A", "not-a-date", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_set_due_project_not_found(self, tmp_path):
+        result = server.set_due("Work/Projects/nonexistent", "2027-01-01", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_unset_due_clears_deadline_field(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A", deadline="2027-01-15")
+        result = server.unset_due("Work/Projects/2026-09-A", root=tmp_path)
+        assert result["ok"] is True
+        text = (tmp_path / "Work" / "Projects" / "2026-09-A" / "index.md").read_text()
+        assert "**Deadline:**" in text
+        parsed = server._parse_index(tmp_path / "Work" / "Projects" / "2026-09-A" / "index.md")
+        assert parsed["deadline"] == ""
+
+    def test_unset_due_project_not_found(self, tmp_path):
+        result = server.unset_due("Work/Projects/ghost", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_list_due_returns_projects_sorted_ascending(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-A", deadline="2027-06-01")
+        make_project(tmp_path, "Work", "2026-09-B", deadline="2027-01-15")
+        make_project(tmp_path, "Work", "2026-09-C", deadline="2027-03-20")
+        results = server.list_due(root=tmp_path)
+        dates = [r["deadline"] for r in results]
+        assert dates == sorted(dates)
+
+    def test_list_due_excludes_projects_without_deadline(self, tmp_path):
+        make_project(tmp_path, "Work", "2026-09-NoDeadline", deadline="")
+        make_project(tmp_path, "Work", "2026-09-WithDeadline", deadline="2027-01-01")
+        results = server.list_due(root=tmp_path)
+        names = [r["name"] for r in results]
+        assert "2026-09-WithDeadline" in names
+        assert "2026-09-NoDeadline" not in names
+
+    def test_get_upcoming_deadlines_returns_within_window(self, tmp_path):
+        from datetime import date, timedelta
+        today = date.today()
+        soon = (today + timedelta(days=5)).isoformat()
+        far = (today + timedelta(days=30)).isoformat()
+        make_project(tmp_path, "Work", "2026-09-Soon", deadline=soon)
+        make_project(tmp_path, "Work", "2026-09-Far", deadline=far)
+        results = server.get_upcoming_deadlines(days=7, root=tmp_path)
+        names = [r["name"] for r in results]
+        assert "2026-09-Soon" in names
+        assert "2026-09-Far" not in names
+
+    def test_get_upcoming_deadlines_skips_invalid_deadline_formats(self, tmp_path):
+        # Projects with empty or malformed deadlines should be skipped gracefully
+        p = make_project(tmp_path, "Work", "2026-09-Bad", deadline="not-a-date")
+        results = server.get_upcoming_deadlines(days=365, root=tmp_path)
+        names = [r["name"] for r in results]
+        assert "2026-09-Bad" not in names
