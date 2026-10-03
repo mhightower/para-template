@@ -622,7 +622,8 @@ def _find_item_path(name: str, root: Path) -> Optional[Path]:
             folder = bucket_dir / name
             if folder.is_dir():
                 idx = folder / "index.md"
-                return idx if idx.exists() else folder
+                if idx.exists():
+                    return idx
             md_file = bucket_dir / f"{name}.md"
             if md_file.is_file():
                 return md_file
@@ -660,12 +661,16 @@ def list_links(item_name: str, root: Optional[Path] = None) -> dict:
                     continue
                 content = md_file.read_text(errors="replace")
                 if f"[[{item_name}]]" in content:
+                    # for folder-based items (index.md), use the parent dir name
+                    link_name = (md_file.parent.name
+                                 if md_file.name == "index.md" else md_file.stem)
                     backlinks.append({
-                        "name": md_file.stem,
+                        "name": link_name,
                         "path": str(md_file.relative_to(r)),
                     })
 
     return {
+        "ok": True,
         "item": item_name,
         "path": str(item_path.relative_to(r)),
         "forward_links": forward_links,
@@ -676,6 +681,13 @@ def list_links(item_name: str, root: Optional[Path] = None) -> dict:
 def lint_links(root: Optional[Path] = None) -> list:
     """Return all broken [[wiki-links]] across the PARA vault."""
     r = root if root is not None else REPO_ROOT
+    resolve_cache: dict = {}
+
+    def _cached_resolve(name: str) -> Optional[Path]:
+        if name not in resolve_cache:
+            resolve_cache[name] = _resolve_link_path(name, r)
+        return resolve_cache[name]
+
     broken = []
     for domain_dir in sorted(r.iterdir()):
         if not domain_dir.is_dir() or domain_dir.name.startswith((".", "_")):
@@ -687,7 +699,7 @@ def lint_links(root: Optional[Path] = None) -> list:
             for md_file in bucket_dir.rglob("*.md"):
                 text = md_file.read_text(errors="replace")
                 for name in _extract_wiki_links(text):
-                    if _resolve_link_path(name, r) is None:
+                    if _cached_resolve(name) is None:
                         broken.append({
                             "source_path": str(md_file.relative_to(r)),
                             "link_name": name,
