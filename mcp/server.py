@@ -507,14 +507,24 @@ def list_resources(domain: Optional[str] = None, with_links: bool = False,
     return results
 
 
-def find_items(query: str, root: Optional[Path] = None) -> "list | dict":
+def find_items(query: str, root: Optional[Path] = None) -> dict:
     """Search all PARA buckets for items matching the natural-language query.
 
-    Returns a list of ranked results (title, path, bucket, excerpt) or a dict
-    with a helpful message when nothing matches.
+    Returns a dict with ok=True and results list, or ok=False with a message
+    and suggestions when nothing matches or query is empty.
     """
     r = root if root is not None else REPO_ROOT
     terms = [t.lower() for t in query.split() if t]
+
+    if not terms:
+        return {
+            "ok": False,
+            "message": "Query is empty.",
+            "suggestions": [
+                "Enter one or more keywords to search.",
+                "Try a project name, area, or topic.",
+            ],
+        }
 
     def _score(filename: str, text: str) -> int:
         name_lower = filename.lower()
@@ -527,11 +537,13 @@ def find_items(query: str, root: Optional[Path] = None) -> "list | dict":
 
     def _excerpt(text: str, terms: list) -> str:
         lower = text.lower()
-        best_pos = len(text)
+        best_pos = None
         for term in terms:
             idx = lower.find(term)
-            if idx != -1 and idx < best_pos:
+            if idx != -1 and (best_pos is None or idx < best_pos):
                 best_pos = idx
+        if best_pos is None:
+            best_pos = 0
         start = max(0, best_pos - 40)
         snippet = text[start:start + 160].strip()
         return snippet[:200]
@@ -562,6 +574,7 @@ def find_items(query: str, root: Optional[Path] = None) -> "list | dict":
 
     if not results:
         return {
+            "ok": False,
             "message": f"No results found for '{query}'.",
             "suggestions": [
                 "Try broader or different keywords.",
@@ -573,7 +586,7 @@ def find_items(query: str, root: Optional[Path] = None) -> "list | dict":
     results.sort(key=lambda x: x["_score"], reverse=True)
     for item in results:
         del item["_score"]
-    return results
+    return {"ok": True, "results": results}
 
 
 # ---------------------------------------------------------------------------
@@ -852,7 +865,7 @@ def tool_revive_item(name: str) -> dict:
 
 
 @mcp.tool(name="find_items")
-def tool_find_items(query: str) -> "list | dict":
+def tool_find_items(query: str) -> dict:
     """Search all PARA buckets with a natural-language query. Returns ranked results."""
     return find_items(query, root=REPO_ROOT)
 

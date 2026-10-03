@@ -1291,26 +1291,30 @@ class TestFindItems:
         arch.mkdir(parents=True)
         (arch / "index.md").write_text("# Old Project\nCompleted legacy work.")
 
-    def test_returns_list(self, tmp_path):
+    def test_returns_dict_with_results(self, tmp_path):
         self._setup_vault(tmp_path)
-        results = server.find_items("Johnson", root=tmp_path)
-        assert isinstance(results, list)
+        result = server.find_items("Johnson", root=tmp_path)
+        assert isinstance(result, dict)
+        assert result["ok"] is True
+        assert "results" in result
 
     def test_finds_by_filename(self, tmp_path):
         self._setup_vault(tmp_path)
-        results = server.find_items("Meeting-Notes", root=tmp_path)
-        paths = [r["path"] for r in results]
+        result = server.find_items("Meeting-Notes", root=tmp_path)
+        paths = [r["path"] for r in result["results"]]
         assert any("Meeting-Notes" in p for p in paths)
 
     def test_finds_by_content(self, tmp_path):
         self._setup_vault(tmp_path)
-        results = server.find_items("Johnson contract", root=tmp_path)
+        result = server.find_items("Johnson contract", root=tmp_path)
+        results = result["results"]
         assert len(results) > 0
         assert any("Johnson" in r["path"] or "Johnson" in r["excerpt"] for r in results)
 
     def test_result_has_required_fields(self, tmp_path):
         self._setup_vault(tmp_path)
-        results = server.find_items("Johnson", root=tmp_path)
+        result = server.find_items("Johnson", root=tmp_path)
+        results = result["results"]
         assert len(results) > 0
         r = results[0]
         assert "title" in r
@@ -1320,16 +1324,16 @@ class TestFindItems:
 
     def test_bucket_field_is_valid_para_bucket(self, tmp_path):
         self._setup_vault(tmp_path)
-        results = server.find_items("Johnson", root=tmp_path)
-        for r in results:
+        result = server.find_items("Johnson", root=tmp_path)
+        for r in result["results"]:
             assert r["bucket"] in {"Projects", "Areas", "Resources", "Archives"}
 
     def test_searches_across_all_buckets(self, tmp_path):
         self._setup_vault(tmp_path)
-        results_proj = server.find_items("Johnson", root=tmp_path)
-        results_area = server.find_items("exercise", root=tmp_path)
-        results_res = server.find_items("Quarterly", root=tmp_path)
-        results_arch = server.find_items("legacy", root=tmp_path)
+        results_proj = server.find_items("Johnson", root=tmp_path)["results"]
+        results_area = server.find_items("exercise", root=tmp_path)["results"]
+        results_res = server.find_items("Quarterly", root=tmp_path)["results"]
+        results_arch = server.find_items("legacy", root=tmp_path)["results"]
         assert len(results_proj) > 0
         assert len(results_area) > 0
         assert len(results_res) > 0
@@ -1339,45 +1343,58 @@ class TestFindItems:
         self._setup_vault(tmp_path)
         result = server.find_items("xyznonexistent", root=tmp_path)
         assert isinstance(result, dict)
+        assert result["ok"] is False
         assert "message" in result
         assert "suggestions" in result
 
+    def test_empty_query_returns_early_without_scan(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.find_items("", root=tmp_path)
+        assert isinstance(result, dict)
+        assert result["ok"] is False
+        assert "suggestions" in result
+
+    def test_whitespace_only_query_returns_early(self, tmp_path):
+        self._setup_vault(tmp_path)
+        result = server.find_items("   ", root=tmp_path)
+        assert result["ok"] is False
+
     def test_excerpt_is_short_string(self, tmp_path):
         self._setup_vault(tmp_path)
-        results = server.find_items("Johnson", root=tmp_path)
-        for r in results:
+        result = server.find_items("Johnson", root=tmp_path)
+        for r in result["results"]:
             assert isinstance(r["excerpt"], str)
             assert len(r["excerpt"]) <= 200
 
     def test_results_ranked_by_relevance(self, tmp_path):
         self._setup_vault(tmp_path)
-        # "Johnson" appears in both filename and content of the project files
-        results = server.find_items("Johnson", root=tmp_path)
-        # file with "Johnson" in filename should rank highly
+        result = server.find_items("Johnson", root=tmp_path)
+        results = result["results"]
         top_path = results[0]["path"]
         assert "Johnson" in top_path
 
     def test_case_insensitive_search(self, tmp_path):
         self._setup_vault(tmp_path)
-        results_lower = server.find_items("johnson", root=tmp_path)
-        results_upper = server.find_items("JOHNSON", root=tmp_path)
+        results_lower = server.find_items("johnson", root=tmp_path)["results"]
+        results_upper = server.find_items("JOHNSON", root=tmp_path)["results"]
         assert len(results_lower) > 0
         assert len(results_upper) > 0
 
     def test_multi_word_query_matches_partial(self, tmp_path):
         self._setup_vault(tmp_path)
-        results = server.find_items("health exercise", root=tmp_path)
-        assert any("Health" in r["path"] for r in results)
+        result = server.find_items("health exercise", root=tmp_path)
+        assert any("Health" in r["path"] for r in result["results"])
 
     def test_path_is_relative(self, tmp_path):
         self._setup_vault(tmp_path)
-        results = server.find_items("Johnson", root=tmp_path)
-        for r in results:
+        result = server.find_items("Johnson", root=tmp_path)
+        for r in result["results"]:
             assert not Path(r["path"]).is_absolute()
 
     def test_title_matches_filename_or_heading(self, tmp_path):
         self._setup_vault(tmp_path)
-        results = server.find_items("Meeting-Notes", root=tmp_path)
+        result = server.find_items("Meeting-Notes", root=tmp_path)
+        results = result["results"]
         assert len(results) > 0
         assert any("Meeting" in r["title"] for r in results)
 
@@ -1392,11 +1409,12 @@ class TestFindItems:
     def test_tool_wrapper_delegates(self, tmp_path, monkeypatch):
         monkeypatch.setattr(server, "REPO_ROOT", tmp_path)
         result = server.tool_find_items("xyznonexistent")
-        assert isinstance(result, (list, dict))
+        assert isinstance(result, dict)
+        assert "ok" in result
 
     def test_skips_files_in_root(self, tmp_path):
         self._setup_vault(tmp_path)
         (tmp_path / "README.md").write_text("top level file")
-        results = server.find_items("Johnson", root=tmp_path)
-        assert isinstance(results, list)
-        assert len(results) > 0
+        result = server.find_items("Johnson", root=tmp_path)
+        assert isinstance(result, dict)
+        assert len(result["results"]) > 0
