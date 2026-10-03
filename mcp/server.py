@@ -3,8 +3,10 @@
 Repo root is resolved from this file's location: Path(__file__).parent.parent.
 All file operations are relative to that root; no absolute paths from config.
 """
+import json
 import re
 import shutil
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
@@ -862,6 +864,111 @@ def get_upcoming_deadlines(days: int = 7, domain: Optional[str] = None,
 
 
 # ---------------------------------------------------------------------------
+# Soft delete / recover (issue #25)
+# ---------------------------------------------------------------------------
+
+TRASH_DIR = ".trash"
+DEFAULT_RECOVERY_DAYS = 30
+
+
+def soft_delete(path: str, root: Optional[Path] = None) -> dict:
+    """Move an item to .trash/ with metadata for later recovery."""
+    r = root if root is not None else REPO_ROOT
+    src = r / path
+    if not src.exists():
+        return {"ok": False, "error": f"Item not found: '{path}'"}
+    trash_root = r / TRASH_DIR
+    trash_root.mkdir(exist_ok=True)
+    trash_id = str(uuid.uuid4())
+    trash_entry = trash_root / trash_id
+    trash_entry.mkdir()
+    shutil.move(str(src), str(trash_entry / src.name))
+    meta = {
+        "trash_id": trash_id,
+        "original_path": path,
+        "name": src.name,
+        "deleted_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    (trash_entry / "meta.json").write_text(json.dumps(meta))
+    return {"ok": True, "trash_id": trash_id, "original_path": path}
+
+
+def recover_item(trash_id: str, root: Optional[Path] = None) -> dict:
+    """Restore a soft-deleted item from .trash/ to its original location."""
+    r = root if root is not None else REPO_ROOT
+    trash_entry = r / TRASH_DIR / trash_id
+    if not trash_entry.exists():
+        return {"ok": False, "error": f"Trash entry '{trash_id}' not found"}
+    meta_path = trash_entry / "meta.json"
+    meta = json.loads(meta_path.read_text())
+    dest = r / meta["original_path"]
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    src = trash_entry / meta["name"]
+    shutil.move(str(src), str(dest))
+    shutil.rmtree(str(trash_entry))
+    return {"ok": True, "restored_to": meta["original_path"]}
+
+
+def list_trash(root: Optional[Path] = None) -> list:
+    """List all items currently in .trash/."""
+    r = root if root is not None else REPO_ROOT
+    trash_root = r / TRASH_DIR
+    if not trash_root.exists():
+        return []
+    items = []
+    for entry in trash_root.iterdir():
+        if entry.is_dir():
+            meta_path = entry / "meta.json"
+            if meta_path.exists():
+                items.append(json.loads(meta_path.read_text()))
+    return sorted(items, key=lambda x: x.get("deleted_at", ""), reverse=True)
+
+
+def purge_expired_trash(recovery_days: int = DEFAULT_RECOVERY_DAYS,
+                        root: Optional[Path] = None) -> list:
+    """Remove trash entries older than recovery_days. Returns list of purged items."""
+    r = root if root is not None else REPO_ROOT
+    trash_root = r / TRASH_DIR
+    if not trash_root.exists():
+        return []
+    cutoff = datetime.now().replace(microsecond=0)
+    purged = []
+    for entry in list(trash_root.iterdir()):
+        if not entry.is_dir():
+            continue
+        meta_path = entry / "meta.json"
+        if not meta_path.exists():
+            continue
+        meta = json.loads(meta_path.read_text())
+        deleted_at = datetime.fromisoformat(meta.get("deleted_at", "2000-01-01T00:00:00"))
+        if (cutoff - deleted_at).days >= recovery_days:
+            shutil.rmtree(str(entry))
+            purged.append(meta["original_path"])
+    return purged
+
+
+def bulk_delete(paths: list, confirmed: bool = False,
+                root: Optional[Path] = None) -> dict:
+    """Soft-delete multiple items. Requires confirmed=True when 3+ items."""
+    if len(paths) >= 3 and not confirmed:
+        return {
+            "ok": False,
+            "error": f"Bulk deletion of {len(paths)} items requires explicit confirmation. "
+                     "Retry with confirmed=True.",
+        }
+    r = root if root is not None else REPO_ROOT
+    trash_ids = []
+    errors = []
+    for path in paths:
+        result = soft_delete(path, root=r)
+        if result["ok"]:
+            trash_ids.append(result["trash_id"])
+        else:
+            errors.append(result["error"])
+    return {"ok": True, "deleted": len(trash_ids), "trash_ids": trash_ids, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
 # MCP tool registration (thin wrappers — no root param exposed to MCP clients)
 # ---------------------------------------------------------------------------
 
@@ -980,6 +1087,36 @@ def tool_find_items(query: str) -> dict:
 def tool_generate_digest(period: str = "daily") -> dict:
     """Generate a daily or weekly PARA digest. Trigger on demand with /digest."""
     return generate_digest(period=period, root=REPO_ROOT)
+
+
+@mcp.tool(name="soft_delete")
+def tool_soft_delete(path: str) -> dict:
+    """Move an item to .trash/ for soft-deletion. Recoverable within 30 days."""
+    return soft_delete(path, root=REPO_ROOT)
+
+
+@mcp.tool(name="recover_item")
+def tool_recover_item(trash_id: str) -> dict:
+    """Restore a soft-deleted item from .trash/ by its trash_id."""
+    return recover_item(trash_id, root=REPO_ROOT)
+
+
+@mcp.tool(name="list_trash")
+def tool_list_trash() -> list:
+    """List all items currently in .trash/ awaiting recovery or purge."""
+    return list_trash(root=REPO_ROOT)
+
+
+@mcp.tool(name="purge_expired_trash")
+def tool_purge_expired_trash(recovery_days: int = DEFAULT_RECOVERY_DAYS) -> list:
+    """Remove trash entries older than recovery_days. Returns list of purged paths."""
+    return purge_expired_trash(recovery_days, root=REPO_ROOT)
+
+
+@mcp.tool(name="bulk_delete")
+def tool_bulk_delete(paths: list, confirmed: bool = False) -> dict:
+    """Soft-delete multiple items. Requires confirmed=True when deleting 3+ items."""
+    return bulk_delete(paths, confirmed, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
