@@ -1559,3 +1559,108 @@ class TestGenerateDigest:
         (tmp_path / "README.md").write_text("top level")
         result = server.generate_digest(period="weekly", root=tmp_path)
         assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# Cross-reference search (issue #27)
+# ---------------------------------------------------------------------------
+
+class TestCrossReferenceSearch:
+    def _seed(self, tmp_path):
+        for domain, bucket, name, content in [
+            ("Work", "Resources", "python-tips", "Python list comprehensions and generators"),
+            ("Work", "Archives", "old-project", "Final report for Python migration project"),
+            ("Personal", "Resources", "recipes", "Cooking recipes and meal planning ideas"),
+            ("Personal", "Archives", "2023-goals", "Annual goals review and reflection"),
+        ]:
+            d = tmp_path / domain / bucket
+            d.mkdir(parents=True, exist_ok=True)
+            (d / f"{name}.md").write_text(f"# {name}\n\n{content}\n")
+
+    def test_search_finds_matching_content(self, tmp_path):
+        self._seed(tmp_path)
+        results = server.search_knowledge("Python", root=tmp_path)
+        names = [r["name"] for r in results]
+        assert "python-tips" in names or "old-project" in names
+
+    def test_search_scope_limits_to_resources(self, tmp_path):
+        self._seed(tmp_path)
+        results = server.search_knowledge("Python", scope=["resources"], root=tmp_path)
+        buckets = {r["bucket"] for r in results}
+        assert "Archives" not in buckets
+
+    def test_search_scope_limits_to_archives(self, tmp_path):
+        self._seed(tmp_path)
+        results = server.search_knowledge("Python", scope=["archives"], root=tmp_path)
+        buckets = {r["bucket"] for r in results}
+        assert "Resources" not in buckets
+
+    def test_search_result_includes_excerpt(self, tmp_path):
+        self._seed(tmp_path)
+        results = server.search_knowledge("Python", root=tmp_path)
+        for r in results:
+            assert "excerpt" in r
+
+    def test_search_result_includes_bucket_and_path(self, tmp_path):
+        self._seed(tmp_path)
+        results = server.search_knowledge("Python", root=tmp_path)
+        for r in results:
+            assert "bucket" in r
+            assert "path" in r
+
+    def test_search_no_results_for_unknown_term(self, tmp_path):
+        self._seed(tmp_path)
+        results = server.search_knowledge("xyzzy_nonexistent", root=tmp_path)
+        assert results == []
+
+    def test_search_sort_by_modified(self, tmp_path):
+        self._seed(tmp_path)
+        results = server.search_knowledge("Python", sort_by="modified", root=tmp_path)
+        mtimes = [r.get("last_modified", "") for r in results]
+        assert mtimes == sorted(mtimes, reverse=True)
+
+    def test_find_similar_returns_related_items(self, tmp_path):
+        self._seed(tmp_path)
+        results = server.find_similar("Work/Resources/python-tips.md", root=tmp_path)
+        # old-project mentions Python too, should appear
+        names = [r["name"] for r in results]
+        assert any("python" in n.lower() or "old" in n.lower() for n in names)
+
+    def test_find_similar_excludes_the_item_itself(self, tmp_path):
+        self._seed(tmp_path)
+        results = server.find_similar("Work/Resources/python-tips.md", root=tmp_path)
+        paths = [r["path"] for r in results]
+        assert "Work/Resources/python-tips.md" not in paths
+
+    def test_find_similar_file_not_found(self, tmp_path):
+        result = server.find_similar("Work/Resources/ghost.md", root=tmp_path)
+        assert isinstance(result, dict)
+        assert result.get("ok") is False
+
+    def test_iter_skips_hidden_dirs(self, tmp_path):
+        (tmp_path / ".hidden" / "Resources").mkdir(parents=True)
+        (tmp_path / ".hidden" / "Resources" / "note.md").write_text("test")
+        results = server.search_knowledge("test", root=tmp_path)
+        assert results == []
+
+    def test_iter_skips_domain_without_bucket(self, tmp_path):
+        (tmp_path / "Work" / "Projects").mkdir(parents=True)
+        (tmp_path / "Work" / "Projects" / "p.md").write_text("python stuff")
+        results = server.search_knowledge("python", root=tmp_path)
+        assert results == []
+
+    def test_excerpt_uses_ellipsis_for_mid_text_match(self, tmp_path):
+        d = tmp_path / "Work" / "Resources"
+        d.mkdir(parents=True)
+        long_content = "x " * 100 + "python " + "y " * 100
+        (d / "longfile.md").write_text(long_content)
+        results = server.search_knowledge("python", root=tmp_path)
+        assert results
+        assert "…" in results[0]["excerpt"]
+
+    def test_find_similar_returns_empty_for_empty_content_item(self, tmp_path):
+        d = tmp_path / "Work" / "Resources"
+        d.mkdir(parents=True)
+        (d / "empty.md").write_text("")
+        result = server.find_similar("Work/Resources/empty.md", root=tmp_path)
+        assert result == []
