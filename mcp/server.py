@@ -766,9 +766,6 @@ def respond_to_staleness_nudge(path: str, action: str,
         return {"ok": True, "path": path, "action": "continue"}
 
     # convert-to-area
-    parts = Path(path).parts
-    if len(parts) < 3 or parts[1] != "Projects":
-        return {"ok": False, "error": "Path must be under <domain>/Projects/<name>"}
     domain, name = parts[0], parts[2]
     dest_dir = r / domain / "Areas"
     dest_dir.mkdir(parents=True, exist_ok=True)
