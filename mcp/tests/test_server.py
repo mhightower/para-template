@@ -1559,3 +1559,116 @@ class TestGenerateDigest:
         (tmp_path / "README.md").write_text("top level")
         result = server.generate_digest(period="weekly", root=tmp_path)
         assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# capture_audio (issue #22)
+# ---------------------------------------------------------------------------
+
+class TestCaptureAudio:
+    def _make_audio_file(self, tmp_path, name="test_note.m4a") -> Path:
+        audio = tmp_path / name
+        audio.write_bytes(b"fake audio data")
+        return audio
+
+    def test_successful_transcription_creates_note(self, tmp_path):
+        audio = self._make_audio_file(tmp_path)
+        result = server.capture_audio(
+            audio_path=str(audio),
+            domain="Personal",
+            transcriber=lambda _: "This is the transcribed text",
+            root=tmp_path,
+        )
+        assert result["ok"] is True
+        note_path = tmp_path / result["path"]
+        assert note_path.exists()
+        assert "This is the transcribed text" in note_path.read_text()
+
+    def test_note_contains_transcribed_tag(self, tmp_path):
+        audio = self._make_audio_file(tmp_path)
+        result = server.capture_audio(
+            audio_path=str(audio),
+            domain="Personal",
+            transcriber=lambda _: "Hello world",
+            root=tmp_path,
+        )
+        text = (tmp_path / result["path"]).read_text()
+        assert "#transcribed" in text
+
+    def test_note_links_to_original_audio(self, tmp_path):
+        audio = self._make_audio_file(tmp_path)
+        result = server.capture_audio(
+            audio_path=str(audio),
+            domain="Personal",
+            transcriber=lambda _: "Hello",
+            root=tmp_path,
+        )
+        text = (tmp_path / result["path"]).read_text()
+        assert "test_note.m4a" in text
+
+    def test_transcription_failure_returns_error(self, tmp_path):
+        audio = self._make_audio_file(tmp_path)
+        def failing_transcriber(_):
+            raise RuntimeError("API unavailable")
+        result = server.capture_audio(
+            audio_path=str(audio),
+            domain="Personal",
+            transcriber=failing_transcriber,
+            root=tmp_path,
+        )
+        assert result["ok"] is False
+        assert "error" in result
+
+    def test_transcription_failure_stores_raw_audio_reference(self, tmp_path):
+        audio = self._make_audio_file(tmp_path)
+        def failing_transcriber(_):
+            raise RuntimeError("API unavailable")
+        result = server.capture_audio(
+            audio_path=str(audio),
+            domain="Personal",
+            transcriber=failing_transcriber,
+            root=tmp_path,
+        )
+        assert result.get("raw_stored") is True
+        raw_note = tmp_path / result["raw_path"]
+        assert raw_note.exists()
+
+    def test_missing_audio_file_returns_error(self, tmp_path):
+        result = server.capture_audio(
+            audio_path=str(tmp_path / "nonexistent.m4a"),
+            domain="Personal",
+            transcriber=lambda _: "text",
+            root=tmp_path,
+        )
+        assert result["ok"] is False
+        assert "not found" in result["error"].lower()
+
+    def test_inbox_bucket_used_for_capture(self, tmp_path):
+        audio = self._make_audio_file(tmp_path)
+        result = server.capture_audio(
+            audio_path=str(audio),
+            domain="Personal",
+            transcriber=lambda _: "Inbox note",
+            root=tmp_path,
+        )
+        assert result["ok"] is True
+        assert "Inbox" in result["path"] or "Resources" in result["path"] or "Areas" in result["path"]
+
+    def test_default_transcriber_raises_without_api_key(self, tmp_path):
+        import os
+        env_backup = os.environ.pop("OPENAI_API_KEY", None)
+        try:
+            with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+                server._default_transcriber(b"audio data")
+        finally:
+            if env_backup is not None:
+                os.environ["OPENAI_API_KEY"] = env_backup
+
+    def test_default_transcriber_raises_not_implemented_with_key(self, tmp_path):
+        import os
+        os.environ["OPENAI_API_KEY"] = "fake-key"
+        try:
+            with pytest.raises(NotImplementedError):
+                server._default_transcriber(b"audio data")
+        finally:
+            del os.environ["OPENAI_API_KEY"]
