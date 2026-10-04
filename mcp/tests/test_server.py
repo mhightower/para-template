@@ -1559,3 +1559,124 @@ class TestGenerateDigest:
         (tmp_path / "README.md").write_text("top level")
         result = server.generate_digest(period="weekly", root=tmp_path)
         assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# Soft delete / recover (issue #25)
+# ---------------------------------------------------------------------------
+
+class TestSoftDelete:
+    def _make_note(self, tmp_path, domain="Work", bucket="Resources", name="my-note") -> Path:
+        p = tmp_path / domain / bucket
+        p.mkdir(parents=True, exist_ok=True)
+        note = p / f"{name}.md"
+        note.write_text(f"# {name}\nContent\n")
+        return note
+
+    def test_soft_delete_moves_file_to_trash(self, tmp_path):
+        note = self._make_note(tmp_path)
+        result = server.soft_delete("Work/Resources/my-note.md", root=tmp_path)
+        assert result["ok"] is True
+        assert not note.exists()
+        trash_dir = tmp_path / ".trash"
+        assert trash_dir.exists()
+
+    def test_soft_delete_stores_original_path_metadata(self, tmp_path):
+        self._make_note(tmp_path)
+        result = server.soft_delete("Work/Resources/my-note.md", root=tmp_path)
+        assert result["ok"] is True
+        assert "trash_id" in result
+
+    def test_soft_delete_file_not_found(self, tmp_path):
+        result = server.soft_delete("Work/Resources/missing.md", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_recover_item_restores_file(self, tmp_path):
+        self._make_note(tmp_path)
+        del_result = server.soft_delete("Work/Resources/my-note.md", root=tmp_path)
+        rec_result = server.recover_item(del_result["trash_id"], root=tmp_path)
+        assert rec_result["ok"] is True
+        assert (tmp_path / "Work" / "Resources" / "my-note.md").exists()
+
+    def test_recover_item_removes_from_trash(self, tmp_path):
+        self._make_note(tmp_path)
+        del_result = server.soft_delete("Work/Resources/my-note.md", root=tmp_path)
+        server.recover_item(del_result["trash_id"], root=tmp_path)
+        trash_entry = tmp_path / ".trash" / del_result["trash_id"]
+        assert not trash_entry.exists()
+
+    def test_recover_item_invalid_id(self, tmp_path):
+        result = server.recover_item("nonexistent-id", root=tmp_path)
+        assert result["ok"] is False
+
+    def test_list_trash_shows_deleted_items(self, tmp_path):
+        self._make_note(tmp_path, name="alpha")
+        self._make_note(tmp_path, name="beta")
+        server.soft_delete("Work/Resources/alpha.md", root=tmp_path)
+        server.soft_delete("Work/Resources/beta.md", root=tmp_path)
+        items = server.list_trash(root=tmp_path)
+        assert len(items) == 2
+
+    def test_purge_expired_trash_removes_old_entries(self, tmp_path):
+        import json, time
+        self._make_note(tmp_path, name="old-item")
+        del_result = server.soft_delete("Work/Resources/old-item.md", root=tmp_path)
+        # Backdate the metadata to simulate expiry
+        meta_path = tmp_path / ".trash" / del_result["trash_id"] / "meta.json"
+        meta = json.loads(meta_path.read_text())
+        meta["deleted_at"] = "2000-01-01T00:00:00"
+        meta_path.write_text(json.dumps(meta))
+        purged = server.purge_expired_trash(recovery_days=30, root=tmp_path)
+        assert len(purged) == 1
+        assert not (tmp_path / ".trash" / del_result["trash_id"]).exists()
+
+    def test_purge_keeps_items_within_window(self, tmp_path):
+        self._make_note(tmp_path, name="fresh")
+        server.soft_delete("Work/Resources/fresh.md", root=tmp_path)
+        purged = server.purge_expired_trash(recovery_days=30, root=tmp_path)
+        assert len(purged) == 0
+
+    def test_bulk_delete_requires_confirmation_for_3_plus(self, tmp_path):
+        for i in range(4):
+            self._make_note(tmp_path, name=f"item{i}")
+        paths = [f"Work/Resources/item{i}.md" for i in range(4)]
+        result = server.bulk_delete(paths, confirmed=False, root=tmp_path)
+        assert result["ok"] is False
+        assert "confirmation" in result["error"].lower()
+
+    def test_bulk_delete_proceeds_with_confirmation(self, tmp_path):
+        for i in range(3):
+            self._make_note(tmp_path, name=f"bulkitem{i}")
+        paths = [f"Work/Resources/bulkitem{i}.md" for i in range(3)]
+        result = server.bulk_delete(paths, confirmed=True, root=tmp_path)
+        assert result["ok"] is True
+        assert result["deleted"] == 3
+
+    def test_list_trash_empty_when_no_trash_dir(self, tmp_path):
+        assert server.list_trash(root=tmp_path) == []
+
+    def test_purge_expired_trash_empty_when_no_trash_dir(self, tmp_path):
+        assert server.purge_expired_trash(root=tmp_path) == []
+
+    def test_purge_skips_non_dir_entries_in_trash(self, tmp_path):
+        trash_dir = tmp_path / ".trash"
+        trash_dir.mkdir()
+        (trash_dir / "stray-file.txt").write_text("stray")
+        purged = server.purge_expired_trash(recovery_days=0, root=tmp_path)
+        assert purged == []
+
+    def test_purge_skips_trash_entries_without_meta(self, tmp_path):
+        trash_dir = tmp_path / ".trash" / "orphan"
+        trash_dir.mkdir(parents=True)
+        (trash_dir / "some-file.md").write_text("orphan")
+        purged = server.purge_expired_trash(recovery_days=0, root=tmp_path)
+        assert purged == []
+
+    def test_bulk_delete_partial_failure_reports_errors(self, tmp_path):
+        for i in range(3):
+            self._make_note(tmp_path, name=f"realitem{i}")
+        paths = [f"Work/Resources/realitem{i}.md" for i in range(3)] + ["Work/Resources/ghost.md"]
+        result = server.bulk_delete(paths, confirmed=True, root=tmp_path)
+        assert result["ok"] is True
+        assert result["deleted"] == 3
+        assert len(result["errors"]) == 1
