@@ -862,6 +862,93 @@ def get_upcoming_deadlines(days: int = 7, domain: Optional[str] = None,
 
 
 # ---------------------------------------------------------------------------
+# Tags (issue #24)
+# ---------------------------------------------------------------------------
+
+TAG_RE = re.compile(r"#[a-zA-Z][a-zA-Z0-9_-]*")
+
+
+def _parse_tags(text: str) -> set:
+    """Extract all #tags from **Tags:** frontmatter line and inline content."""
+    return set(TAG_RE.findall(text))
+
+
+def _get_frontmatter_tags(text: str) -> list:
+    """Return tags from the **Tags:** field only (for structured editing)."""
+    m = re.search(r"\*\*Tags:\*\*\s*(.*)", text)
+    if not m:
+        return []
+    return TAG_RE.findall(m.group(1))
+
+
+def _set_frontmatter_tags(text: str, tags: list) -> str:
+    """Rewrite or add the **Tags:** line with the given tag list."""
+    tags_line = f"**Tags:** {' '.join(tags)}" if tags else "**Tags:**"
+    if re.search(r"\*\*Tags:\*\*", text):
+        return re.sub(r"\*\*Tags:\*\*.*", tags_line, text)
+    return text.rstrip("\n") + f"\n{tags_line}\n"
+
+
+def tag_item(path: str, tag: str, root: Optional[Path] = None) -> dict:
+    """Add a #tag to an item's **Tags:** frontmatter field."""
+    r = root if root is not None else REPO_ROOT
+    file_path = r / path
+    if not file_path.exists():
+        return {"ok": False, "error": f"File not found: '{path}'"}
+    if not TAG_RE.match(tag):
+        return {"ok": False, "error": f"Invalid tag '{tag}'. Must match #word pattern."}
+    text = file_path.read_text()
+    existing = _get_frontmatter_tags(text)
+    if tag in existing:
+        return {"ok": False, "error": f"Tag '{tag}' already present in '{path}'"}
+    new_tags = existing + [tag]
+    file_path.write_text(_set_frontmatter_tags(text, new_tags))
+    return {"ok": True, "path": path, "tags": new_tags}
+
+
+def untag_item(path: str, tag: str, root: Optional[Path] = None) -> dict:
+    """Remove a #tag from an item's **Tags:** frontmatter field."""
+    r = root if root is not None else REPO_ROOT
+    file_path = r / path
+    if not file_path.exists():
+        return {"ok": False, "error": f"File not found: '{path}'"}
+    text = file_path.read_text()
+    existing = _get_frontmatter_tags(text)
+    if tag not in existing:
+        return {"ok": False, "error": f"Tag '{tag}' not found in '{path}'"}
+    new_tags = [t for t in existing if t != tag]
+    file_path.write_text(_set_frontmatter_tags(text, new_tags))
+    return {"ok": True, "path": path, "tags": new_tags}
+
+
+def _iter_all_md_files(root: Path):
+    """Yield all .md files under root, skipping hidden/underscore dirs."""
+    for d in root.iterdir():
+        if d.is_dir() and not d.name.startswith((".", "_")):
+            yield from d.rglob("*.md")
+
+
+def list_tags(root: Optional[Path] = None) -> list:
+    """Return all tags in use across all PARA items with item counts."""
+    r = root if root is not None else REPO_ROOT
+    counts: dict = {}
+    for f in _iter_all_md_files(r):
+        for tag in _parse_tags(f.read_text()):
+            counts[tag] = counts.get(tag, 0) + 1
+    return sorted([{"tag": t, "count": c} for t, c in counts.items()], key=lambda x: -x["count"])
+
+
+def get_tagged(tag: str, root: Optional[Path] = None) -> list:
+    """Return all items across all PARA buckets that carry the given tag."""
+    r = root if root is not None else REPO_ROOT
+    results = []
+    for f in _iter_all_md_files(r):
+        if tag in _parse_tags(f.read_text()):
+            results.append({"path": str(f.relative_to(r)), "name": f.stem})
+    return results
+
+
+# ---------------------------------------------------------------------------
 # MCP tool registration (thin wrappers — no root param exposed to MCP clients)
 # ---------------------------------------------------------------------------
 
@@ -980,6 +1067,30 @@ def tool_find_items(query: str) -> dict:
 def tool_generate_digest(period: str = "daily") -> dict:
     """Generate a daily or weekly PARA digest. Trigger on demand with /digest."""
     return generate_digest(period=period, root=REPO_ROOT)
+
+
+@mcp.tool(name="tag_item")
+def tool_tag_item(path: str, tag: str) -> dict:
+    """Add a #tag to any PARA item's Tags frontmatter."""
+    return tag_item(path, tag, root=REPO_ROOT)
+
+
+@mcp.tool(name="untag_item")
+def tool_untag_item(path: str, tag: str) -> dict:
+    """Remove a #tag from a PARA item's Tags frontmatter."""
+    return untag_item(path, tag, root=REPO_ROOT)
+
+
+@mcp.tool(name="list_tags")
+def tool_list_tags() -> list:
+    """List all tags in use across all PARA items with counts."""
+    return list_tags(root=REPO_ROOT)
+
+
+@mcp.tool(name="get_tagged")
+def tool_get_tagged(tag: str) -> list:
+    """Return all PARA items carrying the given #tag."""
+    return get_tagged(tag, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
