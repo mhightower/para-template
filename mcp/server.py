@@ -707,6 +707,78 @@ def lint_links(root: Optional[Path] = None) -> list:
     return broken
 
 
+def staleness_nudge(threshold_days: int = 30, root: Optional[Path] = None) -> list:
+    """Return projects whose last modification exceeds threshold_days.
+
+    Staleness is based on the most recent mtime across all files in the project
+    directory (not just index.md). Respects a per-project **Staleness Threshold:**
+    N field in index.md.
+    """
+    r = root if root is not None else REPO_ROOT
+    results = []
+    for proj in list_projects(root=r):
+        proj_dir = r / proj["path"]
+        index_path = proj_dir / "index.md"
+        text = index_path.read_text() if index_path.exists() else ""
+        m = re.search(r"\*\*Staleness Threshold:\*\*\s*(\d+)", text)
+        effective_threshold = int(m.group(1)) if m else threshold_days
+        # use most recent mtime across all files in the project dir
+        all_files = list(proj_dir.rglob("*"))
+        if all_files:
+            newest_mtime = max(f.stat().st_mtime for f in all_files if f.is_file())
+            days_since = (datetime.now() - datetime.fromtimestamp(newest_mtime)).days
+        else:
+            days_since = proj["days_since_modified"]
+        if days_since >= effective_threshold:
+            entry = dict(proj)
+            entry["days_since_modified"] = days_since
+            results.append(entry)
+    return results
+
+
+VALID_NUDGE_ACTIONS = {"archive", "continue", "convert-to-area"}
+
+
+def respond_to_staleness_nudge(path: str, action: str,
+                                root: Optional[Path] = None) -> dict:
+    """Handle a user response to a staleness nudge: archive, continue, or convert-to-area."""
+    if action not in VALID_NUDGE_ACTIONS:
+        return {
+            "ok": False,
+            "error": f"Invalid action '{action}'. Must be one of: {', '.join(sorted(VALID_NUDGE_ACTIONS))}",
+        }
+    # Validate path is exactly <domain>/Projects/<name> (relative, no traversal)
+    parts = Path(path).parts
+    if (len(parts) != 3 or parts[1] != "Projects"
+            or ".." in parts or any(p == "" for p in parts)):
+        return {"ok": False, "error": "Path must be exactly <domain>/Projects/<name>"}
+    r = root if root is not None else REPO_ROOT
+    src = r / parts[0] / "Projects" / parts[2]
+    if not src.exists():
+        return {"ok": False, "error": f"Path '{path}' not found"}
+
+    if action == "archive":
+        return archive_project(path, root=r)
+
+    if action == "continue":
+        index = src / "index.md"
+        index.touch()
+        return {"ok": True, "path": path, "action": "continue"}
+
+    # convert-to-area
+    parts = Path(path).parts
+    if len(parts) < 3 or parts[1] != "Projects":
+        return {"ok": False, "error": "Path must be under <domain>/Projects/<name>"}
+    domain, name = parts[0], parts[2]
+    dest_dir = r / domain / "Areas"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / name
+    if dest.exists():
+        return {"ok": False, "error": f"'{name}' already exists in {domain}/Areas"}
+    shutil.move(str(src), str(dest))
+    return {"ok": True, "path": f"{domain}/Areas/{name}", "action": "convert-to-area"}
+
+
 def list_resources(domain: Optional[str] = None, with_links: bool = False,
                    root: Optional[Path] = None) -> list:
     """List all resources across domains (or one domain), optionally including their links."""
@@ -1115,6 +1187,18 @@ def tool_list_links(item_name: str) -> dict:
 def tool_lint_links() -> list:
     """Return all broken [[wiki-links]] across the vault."""
     return lint_links(root=REPO_ROOT)
+
+
+@mcp.tool(name="staleness_nudge")
+def tool_staleness_nudge(threshold_days: int = 30) -> list:
+    """List projects with no activity beyond threshold_days (default 30). Respects per-project overrides."""
+    return staleness_nudge(threshold_days=threshold_days, root=REPO_ROOT)
+
+
+@mcp.tool(name="respond_to_staleness_nudge")
+def tool_respond_to_staleness_nudge(path: str, action: str) -> dict:
+    """Respond to a staleness nudge: archive, continue, or convert-to-area."""
+    return respond_to_staleness_nudge(path, action, root=REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
